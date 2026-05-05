@@ -1,12 +1,15 @@
 use std::path::Path;
 use std::process::Command;
+
 use anyhow::{Context, Result, bail};
+
 pub fn health_check(path: &Path) -> Result<()> {
     if !path.is_file() {
         bail!("{} does not exist", path.display());
     }
     Ok(())
 }
+
 pub fn worker_running_for_chat(path: &Path, chat_id: &str) -> Result<bool> {
     let output = Command::new(path)
         .arg("workers")
@@ -25,6 +28,7 @@ pub fn worker_running_for_chat(path: &Path, chat_id: &str) -> Result<bool> {
         .lines()
         .any(|line| line.contains(chat_id) && line.contains("RUNNING")))
 }
+
 pub fn send_continue(path: &Path, provider: &str, chat_id: &str, text: &str) -> Result<()> {
     let output = Command::new(path)
         .arg("send")
@@ -47,6 +51,7 @@ pub fn send_continue(path: &Path, provider: &str, chat_id: &str, text: &str) -> 
 
     Ok(())
 }
+
 pub fn create_chat(path: &Path, provider: &str, name: &str) -> Result<String> {
     let output = Command::new(path)
         .arg("chat")
@@ -73,6 +78,7 @@ pub fn create_chat(path: &Path, provider: &str, name: &str) -> Result<String> {
     }
     Ok(chat_id)
 }
+
 pub fn rename_chat(path: &Path, chat_id: &str, name: &str) -> Result<()> {
     let output = Command::new(path)
         .arg("chat")
@@ -87,6 +93,26 @@ pub fn rename_chat(path: &Path, chat_id: &str, name: &str) -> Result<()> {
     if !output.status.success() {
         bail!(
             "{} chat rename failed: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    Ok(())
+}
+
+pub fn kill_chat(path: &Path, chat_id: &str) -> Result<()> {
+    let output = Command::new(path)
+        .arg("chat")
+        .arg("kill")
+        .arg("--chat-id")
+        .arg(chat_id)
+        .output()
+        .with_context(|| format!("failed to execute {} chat kill", path.display()))?;
+
+    if !output.status.success() {
+        bail!(
+            "{} chat kill failed: {}",
             path.display(),
             String::from_utf8_lossy(&output.stderr)
         );
