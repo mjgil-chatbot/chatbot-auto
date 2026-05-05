@@ -39,3 +39,17 @@ impl AppPaths {
 const DEFAULT_CHATBOT_CTL_BINARY: &str = "chatbot-ctl";
 const DEFAULT_WATCHER_SCRIPT_NAME: &str = "codex-rust-chatbot-continue.sh";
 const DEFAULT_RUST_CHATBOT_SHARED_ROOT_DIR: &str = ".rust-chatbot";
+const RUST_CHATBOT_CTL_RELATIVE_CANDIDATES: &[&str] = &[
+    "../rust-chatbot/target/release/chatbot-ctl",
+    "../rust-chatbot/target/debug/chatbot-ctl",
+    "rust-chatbot/target/release/chatbot-ctl",
+    "rust-chatbot/target/debug/chatbot-ctl",
+    "git/rust-chatbot/target/release/chatbot-ctl",
+    "git/rust-chatbot/target/debug/chatbot-ctl",
+];
+const LEGACY_WATCHER_RELATIVE_CANDIDATES: &[&str] = &[
+    "../bash-snippets/codex-rust-chatbot-continue.sh",
+    "bash-snippets/codex-rust-chatbot-continue.sh",
+    "../git/bash-snippets/codex-rust-chatbot-continue.sh",
+    "git/bash-snippets/codex-rust-chatbot-continue.sh",
+];
