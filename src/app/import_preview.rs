@@ -406,3 +406,43 @@ pub(super) fn last_legacy_import_result_lines(result: Option<&LegacyImportResult
     }
     lines
 }
+pub(super) fn legacy_import_history_lines(
+    history: &[LegacyImportResult],
+    limit: usize,
+) -> Vec<String> {
+    if history.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = vec!["Recent import outcomes:".to_owned()];
+    for item in history.iter().take(limit) {
+        lines.push(format!(
+            "- {} | {} | {} | {} add / {} update / {} unchanged",
+            item.recorded_at,
+            item.outcome,
+            item.source_path,
+            item.added,
+            item.updated,
+            item.unchanged
+        ));
+    }
+    lines
+}
+pub(super) fn find_target_index_by_identity(
+    targets: &[TargetConfig],
+    provider: &str,
+    name: &str,
+) -> Option<usize> {
+    targets
+        .iter()
+        .position(|target| target.provider == provider && target.name == name)
+}
+pub(super) fn preview_entry_identity_text(entry: &ImportPreviewEntry) -> String {
+    format!("{} / {}", entry.provider, entry.name)
+}
+fn preview_entry_stable_id(entry: &ImportPreviewEntry) -> String {
+    format!("{}::{}", entry.provider, entry.name)
+}
+pub(super) fn preview_entry_stable_id_label(entry: &ImportPreviewEntry) -> String {
+    format!("id={}", preview_entry_stable_id(entry))
+}
