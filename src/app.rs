@@ -16,3 +16,37 @@ struct TargetRuntimeState {
     last_checked_at: Option<DateTime<Utc>>,
     last_sent_at: Option<DateTime<Utc>>,
 }
+#[derive(Clone, Debug)]
+struct ProviderDataDir {
+    provider: String,
+    path: std::path::PathBuf,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ImportSummary {
+    processed: usize,
+    added: usize,
+    updated: usize,
+    unchanged: usize,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ImportPreviewKind {
+    Add,
+    Update,
+    Unchanged,
+}
+impl ImportPreviewKind {
+    fn metadata(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Add => ("Add", "new target"),
+            Self::Update => ("Update", "managed fields changed"),
+            Self::Unchanged => ("Unchanged", "already matches import"),
+        }
+    }}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ImportPreviewFilter {
+    #[default]
+    All,
+    Add,
+    Update,
+    Unchanged,
+}
