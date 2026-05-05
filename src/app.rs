@@ -4,10 +4,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 use chrono::{DateTime, Local, Utc};
 use eframe::egui;
-use crate::config;
-use crate::config::AppConfig;
-use crate::config::LegacyImportResult;
-use crate::config::TargetConfig;
+use crate::chatbot_ctl;
+use crate::config::{self, AppConfig, AppPaths, LegacyImportResult, TargetConfig};
+use crate::engine;
+use crate::engine::EngineAction;
+use crate::engine::EngineEvent;
 use crate::session_store::{self, RecentSession};
 const LEGACY_IMPORT_HISTORY_LIMIT: usize = 8;
 const LEGACY_IMPORT_HISTORY_COMPACT_LIMIT: usize = 3;
@@ -20,6 +21,26 @@ struct TargetRuntimeState {
     last_decision: String,
     last_checked_at: Option<DateTime<Utc>>,
     last_sent_at: Option<DateTime<Utc>>,
+}
+pub struct ChatbotAutoApp {
+    paths: Arc<AppPaths>,
+    config: AppConfig,
+    statuses: Vec<TargetRuntimeState>,
+    logs: Vec<String>,
+    selected_target: Option<usize>,
+    last_poll: Instant,
+    engine_receiver: Option<Receiver<EngineEvent>>,
+    engine_running: bool,
+    status_message: String,
+    provider_data_dirs: Vec<ProviderDataDir>,
+    last_saved_config_snapshot: String,
+    import_preview: Option<ImportPreview>,
+    import_preview_filter: ImportPreviewFilter,
+    import_preview_sort: ImportPreviewSort,
+    import_preview_search: String,
+    #[allow(dead_code)]
+    import_history_expanded: bool,
+    preview_focused_target: Option<usize>,
 }
 #[derive(Clone, Debug)]
 struct ProviderDataDir {
@@ -101,6 +122,76 @@ struct ImportPreview {
     entries: Vec<ImportPreviewEntry>,
     imported_targets: Vec<TargetConfig>,
 }
+impl ChatbotAutoApp {
+    pub fn new(config: AppConfig, paths: Arc<AppPaths>) -> Self {
+        let last_saved_config_snapshot = config_snapshot(&config);
+        let mut app = Self {
+            paths,
+            statuses: Vec::new(),
+            config,
+            logs: Vec::new(),
+            selected_target: None,
+            last_poll: Instant::now(),
+            engine_receiver: None,
+            engine_running: false,
+            status_message: String::new(),
+            provider_data_dirs: discover_provider_data_dirs(),
+            last_saved_config_snapshot,
+            import_preview: None,
+            import_preview_filter: ImportPreviewFilter::All,
+            import_preview_sort: ImportPreviewSort::KindThenName,
+            import_preview_search: String::new(),
+            import_history_expanded: false,
+            preview_focused_target: None,
+        };
+        app.sync_statuses();
+        app.refresh_ctl_health();
+        app
+    }}
+impl ChatbotAutoApp {
+    fn sync_statuses(&mut self) {
+        while self.statuses.len() < self.config.targets.len() {
+            self.statuses.push(TargetRuntimeState::default());
+        }
+        self.statuses.truncate(self.config.targets.len());
+        if self.selected_target.is_none() && !self.config.targets.is_empty() {
+            self.selected_target = Some(0);
+        }
+        if matches!(self.selected_target, Some(index) if index >= self.config.targets.len()) {
+            self.selected_target = self.config.targets.len().checked_sub(1);
+        }
+    }}
+impl ChatbotAutoApp {
+    fn refresh_ctl_health(&mut self) {
+        self.status_message = match chatbot_ctl::health_check(&self.config.chatbot_ctl_path) {
+            Ok(()) => format!(
+                "chatbot-ctl ready: {}",
+                self.config.chatbot_ctl_path.display()
+            ),
+            Err(error) => format!("chatbot-ctl error: {error}"),
+        };
+    }}
+impl ChatbotAutoApp {
+    fn run_engine(&mut self, action: EngineAction) {
+        if self.engine_running {
+            self.logs.push(format!(
+                "{} engine run skipped: already running",
+                timestamp_now()
+            ));
+            return;
+        }
+
+        self.engine_running = true;
+        let (sender, receiver) = mpsc::channel();
+        let config = normalized_config_clone(&mut self.config);
+        let last_sent_at = self
+            .statuses
+            .iter()
+            .map(|status| status.last_sent_at)
+            .collect();
+        thread::spawn(move || engine::run(action, config, last_sent_at, sender));
+        self.engine_receiver = Some(receiver);
+    }}
 fn format_timestamp(timestamp: DateTime<Utc>) -> String {
     timestamp
         .with_timezone(&Local)

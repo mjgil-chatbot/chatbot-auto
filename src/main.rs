@@ -2,6 +2,7 @@ mod app;
 mod chatbot_ctl;
 mod config;
 mod engine;
+mod heuristics;
 mod session_store;
 use std::sync::Arc;
 use anyhow::Result;
