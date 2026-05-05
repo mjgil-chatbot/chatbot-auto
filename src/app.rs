@@ -4,6 +4,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use chrono::{DateTime, Local, Utc};
 use eframe::egui;
+use crate::session_store::{self, RecentSession};
 const LEGACY_IMPORT_HISTORY_LIMIT: usize = 8;
 const LEGACY_IMPORT_HISTORY_COMPACT_LIMIT: usize = 3;
 #[derive(Clone, Debug, Default)]
@@ -88,4 +89,35 @@ struct ImportPreviewEntry {
     name: String,
     provider: String,
     kind: ImportPreviewKind,
+}
+fn format_timestamp(timestamp: DateTime<Utc>) -> String {
+    timestamp
+        .with_timezone(&Local)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
+}
+fn timestamp_now() -> String {
+    Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+fn blank_to_dash(value: &str) -> &str {
+    if value.is_empty() { "-" } else { value }
+}
+fn provider_path<'a>(
+    provider_data_dirs: &'a [ProviderDataDir],
+    provider: &str,
+) -> Option<&'a std::path::Path> {
+    provider_data_dirs
+        .iter()
+        .find(|option| option.provider == provider)
+        .map(|option| option.path.as_path())
+}
+fn recent_sessions_for_provider(
+    provider_data_dirs: &[ProviderDataDir],
+    provider: &str,
+) -> Vec<RecentSession> {
+    let Some(data_dir) = provider_path(provider_data_dirs, provider) else {
+        return Vec::new();
+    };
+    let sessions_json_path = data_dir.join("sessions.json");
+    session_store::recent_sessions(&sessions_json_path, 10).unwrap_or_default()
 }
