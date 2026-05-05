@@ -1,9 +1,12 @@
 use eframe::egui;
+
 use super::{ChatbotAutoApp, timestamp_now};
 use crate::config::{self, AppConfig, LegacyImportResult, TargetConfig};
 use crate::legacy_import;
+
 pub(super) const LEGACY_IMPORT_HISTORY_LIMIT: usize = 8;
 pub(super) const LEGACY_IMPORT_HISTORY_COMPACT_LIMIT: usize = 3;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct ImportSummary {
     pub(super) processed: usize,
@@ -11,12 +14,14 @@ pub(super) struct ImportSummary {
     pub(super) updated: usize,
     pub(super) unchanged: usize,
 }
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ImportPreviewKind {
     Add,
     Update,
     Unchanged,
 }
+
 impl ImportPreviewKind {
     pub(super) fn metadata(self) -> (&'static str, &'static str) {
         match self {
@@ -24,7 +29,9 @@ impl ImportPreviewKind {
             Self::Update => ("Update", "managed fields changed"),
             Self::Unchanged => ("Unchanged", "already matches import"),
         }
-    }}
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum ImportPreviewFilter {
     #[default]
@@ -33,6 +40,7 @@ pub(super) enum ImportPreviewFilter {
     Update,
     Unchanged,
 }
+
 impl ImportPreviewFilter {
     pub(super) fn label(self) -> &'static str {
         match self {
@@ -41,8 +49,8 @@ impl ImportPreviewFilter {
             Self::Update => "Update",
             Self::Unchanged => "Unchanged",
         }
-    }}
-impl ImportPreviewFilter {
+    }
+
     pub(super) fn matches(self, kind: ImportPreviewKind) -> bool {
         match self {
             Self::All => true,
@@ -50,7 +58,9 @@ impl ImportPreviewFilter {
             Self::Update => kind == ImportPreviewKind::Update,
             Self::Unchanged => kind == ImportPreviewKind::Unchanged,
         }
-    }}
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum ImportPreviewSort {
     #[default]
@@ -58,6 +68,7 @@ pub(super) enum ImportPreviewSort {
     ProviderThenName,
     Name,
 }
+
 impl ImportPreviewSort {
     pub(super) fn label(self) -> &'static str {
         match self {
@@ -65,13 +76,16 @@ impl ImportPreviewSort {
             Self::ProviderThenName => "Provider then Name",
             Self::Name => "Name",
         }
-    }}
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ImportPreviewEntry {
     pub(super) name: String,
     pub(super) provider: String,
     pub(super) kind: ImportPreviewKind,
 }
+
 #[derive(Clone, Debug)]
 pub(super) struct ImportPreview {
     pub(super) source_path: String,
@@ -79,6 +93,7 @@ pub(super) struct ImportPreview {
     pub(super) entries: Vec<ImportPreviewEntry>,
     pub(super) imported_targets: Vec<TargetConfig>,
 }
+
 impl ChatbotAutoApp {
     pub(super) fn import_legacy_targets(&mut self) {
         let import_issues =
@@ -149,8 +164,8 @@ impl ChatbotAutoApp {
                 ));
             }
         }
-    }}
-impl ChatbotAutoApp {
+    }
+
     pub(super) fn apply_import_preview(&mut self) {
         let Some(preview) = self.import_preview.take() else {
             return;
@@ -177,8 +192,8 @@ impl ChatbotAutoApp {
             summary,
             "import applied".to_owned(),
         ));
-    }}
-impl ChatbotAutoApp {
+    }
+
     pub(super) fn dismiss_import_preview(&mut self) {
         if let Some(preview) = self.import_preview.take() {
             self.import_preview_filter = ImportPreviewFilter::All;
@@ -196,11 +211,13 @@ impl ChatbotAutoApp {
                 preview.source_path
             ));
         }
-    }}
-impl ChatbotAutoApp {
+    }
+
     pub(super) fn record_legacy_import_result(&mut self, result: LegacyImportResult) {
         record_legacy_import_result(&mut self.config, result);
-    }}
+    }
+}
+
 pub(super) fn merge_imported_targets(
     existing: &mut Vec<TargetConfig>,
     imported: Vec<TargetConfig>,
@@ -248,9 +265,11 @@ pub(super) fn merge_imported_targets(
     }
     summary
 }
+
 fn import_managed_fields_changed(existing: &TargetConfig, imported: &TargetConfig) -> bool {
     existing.data_dir != imported.data_dir || existing.continue_text != imported.continue_text
 }
+
 pub(super) fn build_import_preview(
     existing: &[TargetConfig],
     imported_targets: Vec<TargetConfig>,
@@ -293,6 +312,7 @@ pub(super) fn build_import_preview(
         imported_targets,
     }
 }
+
 fn legacy_import_result(
     outcome: &str,
     source_path: &str,
@@ -310,6 +330,7 @@ fn legacy_import_result(
         detail,
     }
 }
+
 pub(super) fn filtered_import_preview_entries(
     entries: &[ImportPreviewEntry],
     filter: ImportPreviewFilter,
@@ -319,6 +340,7 @@ pub(super) fn filtered_import_preview_entries(
         .filter(|entry| filter.matches(entry.kind))
         .collect()
 }
+
 pub(super) fn searched_sorted_filtered_import_preview_entries<'a>(
     entries: &'a [ImportPreviewEntry],
     filter: ImportPreviewFilter,
@@ -350,6 +372,7 @@ pub(super) fn searched_sorted_filtered_import_preview_entries<'a>(
     });
     entries
 }
+
 fn import_preview_kind_rank(kind: ImportPreviewKind) -> u8 {
     match kind {
         ImportPreviewKind::Add => 0,
@@ -357,6 +380,7 @@ fn import_preview_kind_rank(kind: ImportPreviewKind) -> u8 {
         ImportPreviewKind::Unchanged => 2,
     }
 }
+
 pub(super) fn import_preview_kind_color(kind: ImportPreviewKind) -> egui::Color32 {
     match kind {
         ImportPreviewKind::Add => egui::Color32::LIGHT_GREEN,
@@ -364,6 +388,7 @@ pub(super) fn import_preview_kind_color(kind: ImportPreviewKind) -> egui::Color3
         ImportPreviewKind::Unchanged => egui::Color32::LIGHT_GRAY,
     }
 }
+
 pub(super) fn empty_import_preview_message(filter: ImportPreviewFilter, search: &str) -> String {
     let search = search.trim();
     if !search.is_empty() {
@@ -377,6 +402,7 @@ pub(super) fn empty_import_preview_message(filter: ImportPreviewFilter, search: 
         ImportPreviewFilter::Unchanged => "No unchanged preview entries are available.".to_owned(),
     }
 }
+
 pub(super) fn record_legacy_import_result(config: &mut AppConfig, result: LegacyImportResult) {
     config.last_legacy_import_result = Some(result.clone());
     config.legacy_import_history.insert(0, result);
@@ -384,10 +410,12 @@ pub(super) fn record_legacy_import_result(config: &mut AppConfig, result: Legacy
         .legacy_import_history
         .truncate(LEGACY_IMPORT_HISTORY_LIMIT);
 }
+
 pub(super) fn clear_legacy_import_status(config: &mut AppConfig) {
     config.last_legacy_import_result = None;
     config.legacy_import_history.clear();
 }
+
 pub(super) fn last_legacy_import_result_lines(result: Option<&LegacyImportResult>) -> Vec<String> {
     let Some(result) = result else {
         return vec!["No legacy import has run yet.".to_owned()];
@@ -406,6 +434,7 @@ pub(super) fn last_legacy_import_result_lines(result: Option<&LegacyImportResult
     }
     lines
 }
+
 pub(super) fn legacy_import_history_lines(
     history: &[LegacyImportResult],
     limit: usize,
@@ -428,6 +457,7 @@ pub(super) fn legacy_import_history_lines(
     }
     lines
 }
+
 pub(super) fn find_target_index_by_identity(
     targets: &[TargetConfig],
     provider: &str,
@@ -437,12 +467,139 @@ pub(super) fn find_target_index_by_identity(
         .iter()
         .position(|target| target.provider == provider && target.name == name)
 }
+
 pub(super) fn preview_entry_identity_text(entry: &ImportPreviewEntry) -> String {
     format!("{} / {}", entry.provider, entry.name)
 }
+
 fn preview_entry_stable_id(entry: &ImportPreviewEntry) -> String {
     format!("{}::{}", entry.provider, entry.name)
 }
+
 pub(super) fn preview_entry_stable_id_label(entry: &ImportPreviewEntry) -> String {
     format!("id={}", preview_entry_stable_id(entry))
+}
+
+pub(super) fn preview_entry_summary_text(entry: &ImportPreviewEntry) -> String {
+    let (badge, detail) = entry.kind.metadata();
+    format!(
+        "[{badge}] {} - {detail}",
+        preview_entry_identity_text(entry)
+    )
+}
+
+pub(super) fn visible_preview_summary_text(entries: &[&ImportPreviewEntry]) -> String {
+    entries
+        .iter()
+        .map(|entry| preview_entry_summary_text(entry))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub(super) fn preview_review_snapshot_text(
+    source_path: &str,
+    summary: ImportSummary,
+    filter: ImportPreviewFilter,
+    sort: ImportPreviewSort,
+    search: &str,
+    entries: &[&ImportPreviewEntry],
+) -> String {
+    let visible_entries = entries
+        .iter()
+        .map(|entry| {
+            format!(
+                "{} | id={}",
+                preview_entry_summary_text(entry),
+                preview_entry_stable_id(entry)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "Source: {source_path}\nFilter: {}\nSort: {}\nSearch: {}\nProcessed {} targets: {} add, {} update, {} unchanged\n\n{}",
+        filter.label(),
+        sort.label(),
+        if search.trim().is_empty() {
+            "(none)"
+        } else {
+            search.trim()
+        },
+        summary.processed,
+        summary.added,
+        summary.updated,
+        summary.unchanged,
+        visible_entries
+    )
+}
+
+pub(super) fn preview_review_snapshot_markdown(
+    source_path: &str,
+    summary: ImportSummary,
+    filter: ImportPreviewFilter,
+    sort: ImportPreviewSort,
+    search: &str,
+    entries: &[&ImportPreviewEntry],
+) -> String {
+    let mut lines = vec![
+        "# Legacy Import Review Snapshot".to_owned(),
+        format!("- Source: `{source_path}`"),
+        format!("- Filter: `{}`", filter.label()),
+        format!("- Sort: `{}`", sort.label()),
+        format!(
+            "- Search: `{}`",
+            if search.trim().is_empty() {
+                "(none)"
+            } else {
+                search.trim()
+            }
+        ),
+        format!(
+            "- Counts: `{}` processed, `{}` add, `{}` update, `{}` unchanged",
+            summary.processed, summary.added, summary.updated, summary.unchanged
+        ),
+        String::new(),
+        "## Visible Entries".to_owned(),
+    ];
+
+    for entry in entries {
+        lines.push(format!(
+            "- {} (`{}`)",
+            preview_entry_summary_text(entry),
+            preview_entry_stable_id(entry)
+        ));
+    }
+
+    lines.join("\n")
+}
+
+pub(super) fn preview_review_snapshot_json(
+    source_path: &str,
+    summary: ImportSummary,
+    filter: ImportPreviewFilter,
+    sort: ImportPreviewSort,
+    search: &str,
+    entries: &[&ImportPreviewEntry],
+) -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "source_path": source_path,
+        "filter": filter.label(),
+        "sort": sort.label(),
+        "search": if search.trim().is_empty() { "(none)" } else { search.trim() },
+        "counts": {
+            "processed": summary.processed,
+            "added": summary.added,
+            "updated": summary.updated,
+            "unchanged": summary.unchanged,
+        },
+        "visible_entries": entries.iter().map(|entry| serde_json::json!({
+            "id": preview_entry_stable_id(entry),
+            "kind": entry.kind.metadata().0,
+            "detail": entry.kind.metadata().1,
+            "provider": entry.provider,
+            "name": entry.name,
+            "identity": preview_entry_identity_text(entry),
+            "summary": preview_entry_summary_text(entry),
+        })).collect::<Vec<_>>(),
+    }))
+    .unwrap_or_default()
 }
