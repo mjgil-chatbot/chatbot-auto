@@ -6,9 +6,8 @@ use chrono::{DateTime, Local, Utc};
 use eframe::egui;
 use crate::chatbot_ctl;
 use crate::config::{self, AppConfig, AppPaths, LegacyImportResult, TargetConfig};
-use crate::engine;
-use crate::engine::EngineAction;
-use crate::engine::EngineEvent;
+use crate::engine::{self, EngineAction, EngineEvent, TargetDecision, TargetUpdate};
+use crate::legacy_import;
 use crate::session_store::{self, RecentSession};
 const LEGACY_IMPORT_HISTORY_LIMIT: usize = 8;
 const LEGACY_IMPORT_HISTORY_COMPACT_LIMIT: usize = 3;
@@ -191,6 +190,142 @@ impl ChatbotAutoApp {
             .collect();
         thread::spawn(move || engine::run(action, config, last_sent_at, sender));
         self.engine_receiver = Some(receiver);
+    }}
+impl ChatbotAutoApp {
+    fn apply_update(&mut self, update: TargetUpdate) {
+        let build_docs_completed = update.build_docs_completed;
+        let target_override = update.target_override;
+        let Some(state) = self.statuses.get_mut(update.index) else {
+            return;
+        };
+
+        state.session_id = update.session_id;
+        state.worker_running = update.worker_running;
+        state.last_message_role = update.last_message_role;
+        state.last_message_preview = update.last_message_preview;
+        state.last_checked_at = Some(update.checked_at);
+        state.last_decision = match update.decision {
+            TargetDecision::Sent => {
+                state.last_sent_at = Some(update.checked_at);
+                "sent continue".to_owned()
+            }
+            TargetDecision::Skipped(reason) => reason,
+            TargetDecision::Error(error) => format!("error: {error}"),
+        };
+
+        if let Some(completed) = build_docs_completed
+            && let Some(target) = self.config.targets.get_mut(update.index)
+        {
+            target.build_docs_completed = completed;
+        }
+        if let Some(target_override) = target_override
+            && let Some(target) = self.config.targets.get_mut(update.index)
+        {
+            *target = target_override;
+        }
+    }}
+impl ChatbotAutoApp {
+    fn maybe_run_poll(&mut self) {
+        if !self.config.automation_enabled || self.engine_running {
+            return;
+        }
+
+        let interval = Duration::from_secs(self.config.poll_interval_seconds.max(5));
+        if self.last_poll.elapsed() >= interval {
+            self.last_poll = Instant::now();
+            self.run_engine(EngineAction::CheckAll);
+        }
+    }}
+impl ChatbotAutoApp {
+    fn add_target(&mut self) {
+        self.config.targets.push(TargetConfig::default());
+        self.sync_statuses();
+        self.selected_target = self.config.targets.len().checked_sub(1);
+    }}
+impl ChatbotAutoApp {
+    fn delete_selected_target(&mut self) {
+        let Some(index) = self.selected_target else {
+            return;
+        };
+        if index < self.config.targets.len() {
+            self.config.targets.remove(index);
+            self.sync_statuses();
+        }
+    }}
+impl ChatbotAutoApp {
+    fn import_legacy_targets(&mut self) {
+        let import_issues =
+            config::validate_legacy_watcher_script_path(&self.config.legacy_watcher_script_path);
+        if !import_issues.is_empty() {
+            let detail = import_issues.join("; ");
+            self.record_legacy_import_result(LegacyImportResult {
+                recorded_at: timestamp_now(),
+                source_path: self.config.legacy_watcher_script_path.clone(),
+                outcome: "skipped".to_owned(),
+                processed: 0,
+                added: 0,
+                updated: 0,
+                unchanged: 0,
+                detail: detail.clone(),
+            });
+            self.logs.push(format!(
+                "{} legacy watcher import skipped: {}",
+                timestamp_now(),
+                detail
+            ));
+            return;
+        }
+
+        match legacy_import::import_targets_from_watcher_script(std::path::Path::new(
+            &self.config.legacy_watcher_script_path,
+        )) {
+            Ok(imported) => {
+                let preview = build_import_preview(
+                    &self.config.targets,
+                    imported,
+                    self.config.legacy_watcher_script_path.clone(),
+                );
+                self.logs.push(format!(
+                    "{} prepared import preview from {} (processed {}, added {}, updated {}, unchanged {})",
+                    timestamp_now(),
+                    preview.source_path,
+                    preview.summary.processed,
+                    preview.summary.added,
+                    preview.summary.updated,
+                    preview.summary.unchanged
+                ));
+                self.record_legacy_import_result(legacy_import_result(
+                    "previewed",
+                    &preview.source_path,
+                    preview.summary,
+                    "import preview prepared".to_owned(),
+                ));
+                self.import_preview_filter = ImportPreviewFilter::All;
+                self.import_preview_sort = ImportPreviewSort::KindThenName;
+                self.import_preview_search.clear();
+                self.import_preview = Some(preview);
+            }
+            Err(error) => {
+                self.record_legacy_import_result(LegacyImportResult {
+                    recorded_at: timestamp_now(),
+                    source_path: self.config.legacy_watcher_script_path.clone(),
+                    outcome: "failed".to_owned(),
+                    processed: 0,
+                    added: 0,
+                    updated: 0,
+                    unchanged: 0,
+                    detail: error.to_string(),
+                });
+                self.logs.push(format!(
+                    "{} failed to import legacy targets: {error}",
+                    timestamp_now()
+                ));
+            }
+        }
+    }}
+impl ChatbotAutoApp {
+    fn record_legacy_import_result(&mut self, result: LegacyImportResult) {
+        record_legacy_import_result(&mut self.config, result);
     }}
 fn format_timestamp(timestamp: DateTime<Utc>) -> String {
     timestamp
