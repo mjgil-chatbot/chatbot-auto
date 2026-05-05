@@ -129,6 +129,53 @@ fn recent_sessions_for_provider(
     let sessions_json_path = data_dir.join("sessions.json");
     session_store::recent_sessions(&sessions_json_path, 10).unwrap_or_default()
 }
+fn merge_imported_targets(
+    existing: &mut Vec<TargetConfig>,
+    imported: Vec<TargetConfig>,
+) -> ImportSummary {
+    let mut summary = ImportSummary::default();
+    for imported_target in imported {
+        if let Some(existing_target) = existing.iter_mut().find(|target| {
+            target.name == imported_target.name && target.provider == imported_target.provider
+        }) {
+            let changed = import_managed_fields_changed(existing_target, &imported_target);
+            let enabled = existing_target.enabled;
+            let cooldown_seconds = existing_target.cooldown_seconds;
+            let notes = existing_target.notes.clone();
+            let build_docs_before_continue = existing_target.build_docs_before_continue;
+            let build_docs_completed = existing_target.build_docs_completed;
+            let auto_increment_iterations = existing_target.auto_increment_iterations;
+            let current_iteration = existing_target.current_iteration;
+            let max_iterations = existing_target.max_iterations;
+            let repo_path = existing_target.repo_path.clone();
+            let design_document = existing_target.design_document.clone();
+            let task_document = existing_target.task_document.clone();
+
+            *existing_target = imported_target;
+            existing_target.enabled = enabled;
+            existing_target.cooldown_seconds = cooldown_seconds;
+            existing_target.notes = notes;
+            existing_target.build_docs_before_continue = build_docs_before_continue;
+            existing_target.build_docs_completed = build_docs_completed;
+            existing_target.auto_increment_iterations = auto_increment_iterations;
+            existing_target.current_iteration = current_iteration;
+            existing_target.max_iterations = max_iterations;
+            existing_target.repo_path = repo_path;
+            existing_target.design_document = design_document;
+            existing_target.task_document = task_document;
+            if changed {
+                summary.updated += 1;
+            } else {
+                summary.unchanged += 1;
+            }
+        } else {
+            existing.push(imported_target);
+            summary.added += 1;
+        }
+        summary.processed += 1;
+    }
+    summary
+}
 fn import_managed_fields_changed(existing: &TargetConfig, imported: &TargetConfig) -> bool {
     existing.data_dir != imported.data_dir || existing.continue_text != imported.continue_text
 }
