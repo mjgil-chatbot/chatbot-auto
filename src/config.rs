@@ -200,6 +200,17 @@ pub fn home_dir() -> Option<PathBuf> {
         .map(|dirs| dirs.home_dir().to_path_buf())
         .or_else(|| env::var_os("HOME").map(PathBuf::from))
 }
+pub fn rust_chatbot_shared_root() -> Option<PathBuf> {
+    env::var_os("RUST_CHATBOT_SHARED_ROOT")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            env::var_os("RUST_CHATBOT_CONFIG_HOME")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        })
+        .or_else(|| home_dir().map(|home| home.join(DEFAULT_RUST_CHATBOT_SHARED_ROOT_DIR)))
+}
 fn find_existing_relative_path(relative_candidates: &[&str]) -> Option<PathBuf> {
     for search_root in search_roots() {
         for relative in relative_candidates {
@@ -229,4 +240,56 @@ fn search_roots() -> Vec<PathBuf> {
     }
 
     roots
+}
+pub fn normalize_config(config: &mut AppConfig) {
+    if !config.legacy_watcher_script_path.trim().is_empty() {
+        config.legacy_watcher_script_path = expand_home_str(&config.legacy_watcher_script_path);
+    }
+    for target in &mut config.targets {
+        normalize_target(target);
+    }
+}
+fn normalize_target(target: &mut TargetConfig) {
+    if target.data_dir.as_os_str().is_empty()
+        && let Some(data_dir) = provider_data_dir(&target.provider)
+    {
+        target.data_dir = data_dir;
+    }
+
+    target.repo_path = expand_home_path(&target.repo_path);
+    if !target.design_document.trim().is_empty() {
+        target.design_document = expand_home_str(&target.design_document);
+    }
+    if !target.task_document.trim().is_empty() {
+        target.task_document = expand_home_str(&target.task_document);
+    }
+    if target.current_iteration == 0 {
+        target.current_iteration = 1;
+    }
+    if target.max_iterations == 0 {
+        target.max_iterations = 1;
+    }
+    if target.max_iterations < target.current_iteration {
+        target.max_iterations = target.current_iteration;
+    }
+}
+pub fn provider_data_dir(provider: &str) -> Option<PathBuf> {
+    let provider = provider.trim();
+    if provider.is_empty() {
+        return None;
+    }
+
+    let root = rust_chatbot_shared_root()?;
+    Some(root.join(format!(".{provider}-desktop")))
+}
+fn expand_home_path(path: &Path) -> PathBuf {
+    PathBuf::from(expand_home_str(&path.display().to_string()))
+}
+fn expand_home_str(path: &str) -> String {
+    if let Some(stripped) = path.strip_prefix("~/")
+        && let Some(home) = home_dir()
+    {
+        return home.join(stripped).display().to_string();
+    }
+    path.to_owned()
 }

@@ -4,6 +4,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 use chrono::{DateTime, Local, Utc};
 use eframe::egui;
+use crate::config;
+use crate::config::AppConfig;
 use crate::config::LegacyImportResult;
 use crate::config::TargetConfig;
 use crate::session_store::{self, RecentSession};
@@ -221,6 +223,12 @@ fn build_import_preview(
         entries,
         imported_targets,
     }
+}
+fn config_snapshot(config: &AppConfig) -> String {
+    serde_json::to_string(config).unwrap_or_default()
+}
+fn normalized_config_in_place(config: &mut AppConfig) {
+    config::normalize_config(config);
 }
 fn legacy_import_result(
     outcome: &str,
