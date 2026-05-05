@@ -132,6 +132,12 @@ fn recent_sessions_for_provider(
     let sessions_json_path = data_dir.join("sessions.json");
     session_store::recent_sessions(&sessions_json_path, 10).unwrap_or_default()
 }
+fn discover_provider_data_dirs() -> Vec<ProviderDataDir> {
+    config::discover_provider_data_dirs()
+        .into_iter()
+        .map(|(provider, path)| ProviderDataDir { provider, path })
+        .collect()
+}
 fn merge_imported_targets(
     existing: &mut Vec<TargetConfig>,
     imported: Vec<TargetConfig>,
