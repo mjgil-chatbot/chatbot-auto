@@ -4,6 +4,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use chrono::{DateTime, Local, Utc};
 use eframe::egui;
+use crate::config::TargetConfig;
 use crate::session_store::{self, RecentSession};
 const LEGACY_IMPORT_HISTORY_LIMIT: usize = 8;
 const LEGACY_IMPORT_HISTORY_COMPACT_LIMIT: usize = 3;
@@ -90,6 +91,13 @@ struct ImportPreviewEntry {
     provider: String,
     kind: ImportPreviewKind,
 }
+#[derive(Clone, Debug)]
+struct ImportPreview {
+    source_path: String,
+    summary: ImportSummary,
+    entries: Vec<ImportPreviewEntry>,
+    imported_targets: Vec<TargetConfig>,
+}
 fn format_timestamp(timestamp: DateTime<Utc>) -> String {
     timestamp
         .with_timezone(&Local)
@@ -120,6 +128,51 @@ fn recent_sessions_for_provider(
     };
     let sessions_json_path = data_dir.join("sessions.json");
     session_store::recent_sessions(&sessions_json_path, 10).unwrap_or_default()
+}
+fn import_managed_fields_changed(existing: &TargetConfig, imported: &TargetConfig) -> bool {
+    existing.data_dir != imported.data_dir || existing.continue_text != imported.continue_text
+}
+fn build_import_preview(
+    existing: &[TargetConfig],
+    imported_targets: Vec<TargetConfig>,
+    source_path: String,
+) -> ImportPreview {
+    let mut summary = ImportSummary::default();
+    let mut entries = Vec::new();
+
+    for imported_target in &imported_targets {
+        let kind = match existing.iter().find(|target| {
+            target.name == imported_target.name && target.provider == imported_target.provider
+        }) {
+            None => {
+                summary.added += 1;
+                ImportPreviewKind::Add
+            }
+            Some(existing_target)
+                if import_managed_fields_changed(existing_target, imported_target) =>
+            {
+                summary.updated += 1;
+                ImportPreviewKind::Update
+            }
+            Some(_) => {
+                summary.unchanged += 1;
+                ImportPreviewKind::Unchanged
+            }
+        };
+        summary.processed += 1;
+        entries.push(ImportPreviewEntry {
+            name: imported_target.name.clone(),
+            provider: imported_target.provider.clone(),
+            kind,
+        });
+    }
+
+    ImportPreview {
+        source_path,
+        summary,
+        entries,
+        imported_targets,
+    }
 }
 fn filtered_import_preview_entries(
     entries: &[ImportPreviewEntry],
