@@ -159,6 +159,17 @@ impl Default for TargetConfig {
         }
     }
 }
+pub fn save(paths: &AppPaths, config: &AppConfig) -> Result<()> {
+    let mut normalized = config.clone();
+    normalize_config(&mut normalized);
+    let json = serde_json::to_string_pretty(&normalized).context("failed to serialize config")?;
+    let tmp_path = paths.config_path.with_extension("json.tmp");
+    fs::write(&tmp_path, json)
+        .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, &paths.config_path)
+        .with_context(|| format!("failed to move {}", paths.config_path.display()))?;
+    Ok(())
+}
 fn default_chatbot_ctl_path() -> PathBuf {
     if let Ok(path) = env::var("RUST_CHATBOT_CTL") {
         return PathBuf::from(path);
@@ -241,6 +252,67 @@ fn search_roots() -> Vec<PathBuf> {
 
     roots
 }
+pub fn append_log_line(log_path: &Path, line: &str) -> Result<()> {
+    use std::io::Write;
+
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .with_context(|| format!("failed to open {}", log_path.display()))?;
+    writeln!(file, "{line}").with_context(|| format!("failed to append {}", log_path.display()))
+}
+pub fn build_continue_text(default_continue_text: &str, target: &TargetConfig) -> String {
+    let base_text = if target.continue_text.trim().is_empty() {
+        default_continue_text.trim()
+    } else {
+        target.continue_text.trim()
+    };
+    let mut text = base_text.to_owned();
+
+    if !target.design_document.trim().is_empty() {
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str("Design document: ");
+        text.push_str(target.design_document.trim());
+    }
+
+    if !target.task_document.trim().is_empty() {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str("Task document: ");
+        text.push_str(target.task_document.trim());
+    }
+
+    append_completion_contract(&mut text);
+    text
+}
+pub fn apply_default_doc_paths(target: &mut TargetConfig) {
+    if target.repo_path.as_os_str().is_empty() {
+        return;
+    }
+
+    let iteration = next_available_iteration(&target.repo_path);
+    target.current_iteration = iteration;
+    target.max_iterations = target.max_iterations.max(iteration);
+    let (design_document, task_document) = iteration_doc_paths(&target.repo_path, iteration);
+    target.design_document = design_document.display().to_string();
+    target.task_document = task_document.display().to_string();
+}
+fn append_completion_contract(text: &mut String) {
+    const CONTRACT: &str = "If more work remains, you must end with an explicit \"Next Steps:\" section. If all work for this iteration is complete, reply with exactly \"Design Doc Fully Implemented\".";
+
+    if text.contains("Design Doc Fully Implemented") && text.contains("Next Steps:") {
+        return;
+    }
+
+    if !text.is_empty() {
+        text.push_str("\n\n");
+    }
+    text.push_str(CONTRACT);
+}
 pub fn normalize_config(config: &mut AppConfig) {
     if !config.legacy_watcher_script_path.trim().is_empty() {
         config.legacy_watcher_script_path = expand_home_str(&config.legacy_watcher_script_path);
@@ -272,6 +344,30 @@ fn normalize_target(target: &mut TargetConfig) {
     if target.max_iterations < target.current_iteration {
         target.max_iterations = target.current_iteration;
     }
+}
+fn next_available_iteration(repo_path: &Path) -> u32 {
+    next_available_iteration_from(repo_path, 1)
+}
+fn next_available_iteration_from(repo_path: &Path, start: u32) -> u32 {
+    let mut iteration = start.max(1);
+    loop {
+        let (design, task) = iteration_doc_paths(repo_path, iteration);
+        if !design.exists() && !task.exists() {
+            return iteration;
+        }
+        iteration += 1;
+    }
+}
+fn iteration_doc_paths(repo_path: &Path, iteration: u32) -> (PathBuf, PathBuf) {
+    let docs_dir = repo_path.join("docs");
+    if iteration <= 1 {
+        return (docs_dir.join("design.md"), docs_dir.join("task.md"));
+    }
+
+    (
+        docs_dir.join(format!("design-{iteration}.md")),
+        docs_dir.join(format!("task-{iteration}.md")),
+    )
 }
 pub fn provider_data_dir(provider: &str) -> Option<PathBuf> {
     let provider = provider.trim();
