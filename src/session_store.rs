@@ -9,6 +9,11 @@ pub struct RecentSession {
     pub name: String,
     pub updated_at: String,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionMessage {
+    pub is_user: bool,
+    pub content: String,
+}
 #[derive(Debug, Deserialize)]
 struct SessionsFile {
     sessions: serde_json::Map<String, serde_json::Value>,
