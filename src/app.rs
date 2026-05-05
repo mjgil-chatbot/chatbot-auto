@@ -189,3 +189,26 @@ fn empty_import_preview_message(filter: ImportPreviewFilter, search: &str) -> St
         ImportPreviewFilter::Unchanged => "No unchanged preview entries are available.".to_owned(),
     }
 }
+fn preview_entry_identity_text(entry: &ImportPreviewEntry) -> String {
+    format!("{} / {}", entry.provider, entry.name)
+}
+fn preview_entry_stable_id(entry: &ImportPreviewEntry) -> String {
+    format!("{}::{}", entry.provider, entry.name)
+}
+fn preview_entry_stable_id_label(entry: &ImportPreviewEntry) -> String {
+    format!("id={}", preview_entry_stable_id(entry))
+}
+fn preview_entry_summary_text(entry: &ImportPreviewEntry) -> String {
+    let (badge, detail) = entry.kind.metadata();
+    format!(
+        "[{badge}] {} - {detail}",
+        preview_entry_identity_text(entry)
+    )
+}
+fn visible_preview_summary_text(entries: &[&ImportPreviewEntry]) -> String {
+    entries
+        .iter()
+        .map(|entry| preview_entry_summary_text(entry))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
