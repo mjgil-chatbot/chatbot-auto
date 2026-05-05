@@ -212,3 +212,126 @@ fn visible_preview_summary_text(entries: &[&ImportPreviewEntry]) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+fn preview_review_snapshot_text(
+    source_path: &str,
+    summary: ImportSummary,
+    filter: ImportPreviewFilter,
+    sort: ImportPreviewSort,
+    search: &str,
+    entries: &[&ImportPreviewEntry],
+) -> String {
+    let visible_entries = entries
+        .iter()
+        .map(|entry| {
+            format!(
+                "{} | id={}",
+                preview_entry_summary_text(entry),
+                preview_entry_stable_id(entry)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "Source: {source_path}\nFilter: {}\nSort: {}\nSearch: {}\nProcessed {} targets: {} add, {} update, {} unchanged\n\n{}",
+        filter.label(),
+        sort.label(),
+        if search.trim().is_empty() {
+            "(none)"
+        } else {
+            search.trim()
+        },
+        summary.processed,
+        summary.added,
+        summary.updated,
+        summary.unchanged,
+        visible_entries
+    )
+}
+fn preview_review_snapshot_markdown(
+    source_path: &str,
+    summary: ImportSummary,
+    filter: ImportPreviewFilter,
+    sort: ImportPreviewSort,
+    search: &str,
+    entries: &[&ImportPreviewEntry],
+) -> String {
+    let mut lines = vec![
+        "# Legacy Import Review Snapshot".to_owned(),
+        format!("- Source: `{source_path}`"),
+        format!("- Filter: `{}`", filter.label()),
+        format!("- Sort: `{}`", sort.label()),
+        format!(
+            "- Search: `{}`",
+            if search.trim().is_empty() {
+                "(none)"
+            } else {
+                search.trim()
+            }
+        ),
+        format!(
+            "- Counts: `{}` processed, `{}` add, `{}` update, `{}` unchanged",
+            summary.processed, summary.added, summary.updated, summary.unchanged
+        ),
+        String::new(),
+        "## Visible Entries".to_owned(),
+    ];
+
+    for entry in entries {
+        lines.push(format!(
+            "- {} (`{}`)",
+            preview_entry_summary_text(entry),
+            preview_entry_stable_id(entry)
+        ));
+    }
+
+    lines.join("\n")
+}
+fn preview_review_snapshot_json(
+    source_path: &str,
+    summary: ImportSummary,
+    filter: ImportPreviewFilter,
+    sort: ImportPreviewSort,
+    search: &str,
+    entries: &[&ImportPreviewEntry],
+) -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "source_path": source_path,
+        "filter": filter.label(),
+        "sort": sort.label(),
+        "search": if search.trim().is_empty() { "(none)" } else { search.trim() },
+        "counts": {
+            "processed": summary.processed,
+            "added": summary.added,
+            "updated": summary.updated,
+            "unchanged": summary.unchanged,
+        },
+        "visible_entries": entries.iter().map(|entry| serde_json::json!({
+            "id": preview_entry_stable_id(entry),
+            "kind": entry.kind.metadata().0,
+            "detail": entry.kind.metadata().1,
+            "provider": entry.provider,
+            "name": entry.name,
+            "identity": preview_entry_identity_text(entry),
+            "summary": preview_entry_summary_text(entry),
+        })).collect::<Vec<_>>(),
+    }))
+    .unwrap_or_default()
+}
+fn target_list_label(provider: &str, name: &str, focused_from_preview: bool) -> String {
+    let mut label = format!("{provider} / {name}");
+    if focused_from_preview {
+        label.push_str(" [focused]");
+    }
+    label
+}
+fn build_docs_paths_changed(
+    design_document_changed: bool,
+    task_document_changed: bool,
+    previous_design_document: &str,
+    current_design_document: &str,
+    previous_task_document: &str,
+    current_task_document: &str,
+) -> bool {
+    (design_document_changed && previous_design_document != current_design_document)
+        || (task_document_changed && previous_task_document != current_task_document)
+}
