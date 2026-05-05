@@ -53,6 +53,38 @@ const LEGACY_WATCHER_RELATIVE_CANDIDATES: &[&str] = &[
     "../git/bash-snippets/codex-rust-chatbot-continue.sh",
     "git/bash-snippets/codex-rust-chatbot-continue.sh",
 ];
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AppConfig {
+    pub chatbot_ctl_path: PathBuf,
+    pub poll_interval_seconds: u64,
+    pub automation_enabled: bool,
+    pub default_continue_text: String,
+    pub default_build_docs_prompt: String,
+    pub legacy_watcher_script_path: String,
+    pub preview_show_stable_ids: bool,
+    pub preferred_preview_export_format: PreviewExportFormat,
+    pub last_legacy_import_result: Option<LegacyImportResult>,
+    pub legacy_import_history: Vec<LegacyImportResult>,
+    pub targets: Vec<TargetConfig>,
+}
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            chatbot_ctl_path: default_chatbot_ctl_path(),
+            poll_interval_seconds: 30,
+            automation_enabled: true,
+            default_continue_text: "continue".to_owned(),
+            default_build_docs_prompt: "Use sequential thinking. Analyze the repository, write the design document and task list in one shot, and leave the project ready for the normal continue loop.".to_owned(),
+            legacy_watcher_script_path: default_legacy_watcher_script_path(),
+            preview_show_stable_ids: false,
+            preferred_preview_export_format: PreviewExportFormat::Text,
+            last_legacy_import_result: None,
+            legacy_import_history: Vec::new(),
+            targets: Vec::new(),
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PreviewExportFormat {
@@ -126,4 +158,75 @@ impl Default for TargetConfig {
             notes: String::new(),
         }
     }
+}
+fn default_chatbot_ctl_path() -> PathBuf {
+    if let Ok(path) = env::var("RUST_CHATBOT_CTL") {
+        return PathBuf::from(path);
+    }
+
+    if let Some(path) = find_in_path("chatbot-ctl") {
+        return path;
+    }
+
+    find_existing_relative_path(RUST_CHATBOT_CTL_RELATIVE_CANDIDATES)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_CHATBOT_CTL_BINARY))
+}
+fn default_legacy_watcher_script_path() -> String {
+    if let Ok(path) = env::var("RUST_CHATBOT_LEGACY_WATCHER_SCRIPT") {
+        return path;
+    }
+
+    if let Some(path) = find_in_path(DEFAULT_WATCHER_SCRIPT_NAME) {
+        return path.display().to_string();
+    }
+
+    find_existing_relative_path(LEGACY_WATCHER_RELATIVE_CANDIDATES)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_WATCHER_SCRIPT_NAME))
+        .display()
+        .to_string()
+}
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    let path_var = env::var_os("PATH")?;
+    for directory in env::split_paths(&path_var) {
+        let candidate = directory.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+pub fn home_dir() -> Option<PathBuf> {
+    BaseDirs::new()
+        .map(|dirs| dirs.home_dir().to_path_buf())
+        .or_else(|| env::var_os("HOME").map(PathBuf::from))
+}
+fn find_existing_relative_path(relative_candidates: &[&str]) -> Option<PathBuf> {
+    for search_root in search_roots() {
+        for relative in relative_candidates {
+            let candidate = search_root.join(relative);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+fn search_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    if let Ok(cwd) = env::current_dir() {
+        roots.push(cwd);
+    }
+
+    if let Ok(exe_path) = env::current_exe()
+        && let Some(parent) = exe_path.parent()
+    {
+        roots.push(parent.to_path_buf());
+    }
+
+    if let Some(home) = home_dir() {
+        roots.push(home);
+    }
+
+    roots
 }
