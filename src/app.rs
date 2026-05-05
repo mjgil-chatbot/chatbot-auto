@@ -307,6 +307,52 @@ fn empty_import_preview_message(filter: ImportPreviewFilter, search: &str) -> St
         ImportPreviewFilter::Unchanged => "No unchanged preview entries are available.".to_owned(),
     }
 }
+fn last_legacy_import_result_lines(result: Option<&LegacyImportResult>) -> Vec<String> {
+    let Some(result) = result else {
+        return vec!["No legacy import has run yet.".to_owned()];
+    };
+
+    let mut lines = vec![
+        format!("When: {}", result.recorded_at),
+        format!("Source: {}", result.source_path),
+        format!(
+            "Outcome: {} ({}, {} add, {} update, {} unchanged)",
+            result.outcome, result.processed, result.added, result.updated, result.unchanged
+        ),
+    ];
+    if !result.detail.trim().is_empty() {
+        lines.push(format!("Detail: {}", result.detail));
+    }
+    lines
+}
+fn legacy_import_history_lines(history: &[LegacyImportResult], limit: usize) -> Vec<String> {
+    if history.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = vec!["Recent import outcomes:".to_owned()];
+    for item in history.iter().take(limit) {
+        lines.push(format!(
+            "- {} | {} | {} | {} add / {} update / {} unchanged",
+            item.recorded_at,
+            item.outcome,
+            item.source_path,
+            item.added,
+            item.updated,
+            item.unchanged
+        ));
+    }
+    lines
+}
+fn find_target_index_by_identity(
+    targets: &[TargetConfig],
+    provider: &str,
+    name: &str,
+) -> Option<usize> {
+    targets
+        .iter()
+        .position(|target| target.provider == provider && target.name == name)
+}
 fn preview_entry_identity_text(entry: &ImportPreviewEntry) -> String {
     format!("{} / {}", entry.provider, entry.name)
 }
@@ -452,4 +498,11 @@ fn build_docs_paths_changed(
 ) -> bool {
     (design_document_changed && previous_design_document != current_design_document)
         || (task_document_changed && previous_task_document != current_task_document)
+}
+fn reset_bootstrap_completion_for_targets(targets: &mut [TargetConfig]) {
+    for target in targets {
+        if target.build_docs_before_continue {
+            target.build_docs_completed = false;
+        }
+    }
 }
