@@ -4,6 +4,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use chrono::{DateTime, Local, Utc};
 use eframe::egui;
+use crate::config::LegacyImportResult;
 use crate::config::TargetConfig;
 use crate::session_store::{self, RecentSession};
 const LEGACY_IMPORT_HISTORY_LIMIT: usize = 8;
@@ -219,6 +220,23 @@ fn build_import_preview(
         summary,
         entries,
         imported_targets,
+    }
+}
+fn legacy_import_result(
+    outcome: &str,
+    source_path: &str,
+    summary: ImportSummary,
+    detail: String,
+) -> LegacyImportResult {
+    LegacyImportResult {
+        recorded_at: timestamp_now(),
+        source_path: source_path.to_owned(),
+        outcome: outcome.to_owned(),
+        processed: summary.processed,
+        added: summary.added,
+        updated: summary.updated,
+        unchanged: summary.unchanged,
+        detail,
     }
 }
 fn filtered_import_preview_entries(
