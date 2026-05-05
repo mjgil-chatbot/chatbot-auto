@@ -1,5 +1,7 @@
 use std::time::{Duration, Instant};
+
 use eframe::egui;
+
 use super::import_preview::{
     LEGACY_IMPORT_HISTORY_COMPACT_LIMIT, clear_legacy_import_status, empty_import_preview_message,
     find_target_index_by_identity, import_preview_kind_color, last_legacy_import_result_lines,
@@ -11,6 +13,7 @@ use super::import_preview::{
 use super::*;
 use crate::config::{self, PreviewExportFormat};
 use crate::engine::EngineAction;
+
 impl ChatbotAutoApp {
     fn save_config_manually(&mut self) {
         match config::save(self.paths.as_ref(), &self.config) {
@@ -27,8 +30,8 @@ impl ChatbotAutoApp {
                 timestamp_now()
             )),
         }
-    }}
-impl ChatbotAutoApp {
+    }
+
     fn reload_config(&mut self) {
         match config::load_or_default(self.paths.as_ref()) {
             Ok(config) => {
@@ -47,8 +50,8 @@ impl ChatbotAutoApp {
                 timestamp_now()
             )),
         }
-    }}
-impl ChatbotAutoApp {
+    }
+
     fn render_top_panel(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -112,8 +115,8 @@ impl ChatbotAutoApp {
                     ui.monospace(format!("State dir: {}", self.paths.log_dir.display()));
                 });
         });
-    }}
-impl ChatbotAutoApp {
+    }
+
     fn render_legacy_import_panel(&mut self, ui: &mut egui::Ui) {
         let default_open = self.import_preview.is_some();
         egui::CollapsingHeader::new("Legacy watcher import")
@@ -340,8 +343,8 @@ impl ChatbotAutoApp {
                         }
                     });
             });
-    }}
-impl ChatbotAutoApp {
+    }
+
     fn render_target_details_panel(&mut self, ctx: &egui::Context) {
         egui::SidePanel::right("target_details")
             .resizable(true)
@@ -568,4 +571,120 @@ impl ChatbotAutoApp {
                     }
                 });
             });
-    }}
+    }
+
+    fn render_targets_panel(&mut self, ctx: &egui::Context) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("Targets");
+            ui.separator();
+            let logs_height = 180.0;
+            let targets_height = (ui.available_height() - logs_height - 48.0).max(140.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), targets_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("targets_scroll")
+                        .show(ui, |ui| {
+                            let mut queued_action = None;
+                            egui::Grid::new("targets_grid")
+                                .num_columns(6)
+                                .min_col_width(70.0)
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    ui.strong("Enabled");
+                                    ui.strong("Target");
+                                    ui.strong("Session");
+                                    ui.strong("Decision");
+                                    ui.strong("Checked");
+                                    ui.strong("Actions");
+                                    ui.end_row();
+
+                                    for (index, target) in
+                                        self.config.targets.iter_mut().enumerate()
+                                    {
+                                        let status = &self.statuses[index];
+                                        ui.checkbox(&mut target.enabled, "");
+                                        let label = target_list_label(
+                                            &target.provider,
+                                            &target.name,
+                                            self.preview_focused_target == Some(index),
+                                        );
+                                        if ui
+                                            .selectable_label(
+                                                self.selected_target == Some(index),
+                                                label,
+                                            )
+                                            .clicked()
+                                        {
+                                            if self.preview_focused_target != Some(index) {
+                                                self.preview_focused_target = None;
+                                            }
+                                            self.selected_target = Some(index);
+                                        }
+                                        ui.label(status.session_id.as_deref().unwrap_or("-"));
+                                        ui.label(if status.last_decision.is_empty() {
+                                            "-"
+                                        } else {
+                                            &status.last_decision
+                                        });
+                                        ui.label(
+                                            status
+                                                .last_checked_at
+                                                .map(format_timestamp)
+                                                .unwrap_or_else(|| "-".to_owned()),
+                                        );
+                                        ui.horizontal(|ui| {
+                                            if ui.button("Check").clicked() {
+                                                queued_action =
+                                                    Some(EngineAction::CheckTarget(index));
+                                            }
+                                            if ui.button("Send").clicked() {
+                                                queued_action =
+                                                    Some(EngineAction::ForceSend(index));
+                                            }
+                                        });
+                                        ui.end_row();
+                                    }
+                                });
+                            if let Some(action) = queued_action {
+                                self.run_engine(action);
+                            }
+                        });
+                },
+            );
+            ui.separator();
+            ui.heading("Recent Logs");
+            ui.separator();
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), logs_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("recent_logs_scroll")
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            for line in &self.logs {
+                                ui.monospace(line);
+                            }
+                        });
+                },
+            );
+        });
+    }
+}
+
+impl eframe::App for ChatbotAutoApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.drain_engine_events();
+        self.maybe_run_poll();
+        self.refresh_ctl_health();
+
+        self.render_top_panel(ctx);
+        self.render_target_details_panel(ctx);
+        self.render_targets_panel(ctx);
+
+        self.persist_config_if_needed();
+        ctx.request_repaint_after(Duration::from_millis(250));
+    }
+}
