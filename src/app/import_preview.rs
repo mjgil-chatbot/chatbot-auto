@@ -151,6 +151,34 @@ impl ChatbotAutoApp {
         }
     }}
 impl ChatbotAutoApp {
+    pub(super) fn apply_import_preview(&mut self) {
+        let Some(preview) = self.import_preview.take() else {
+            return;
+        };
+
+        let summary = merge_imported_targets(&mut self.config.targets, preview.imported_targets);
+        self.sync_statuses();
+        self.provider_data_dirs = super::discover_provider_data_dirs();
+        self.import_preview_filter = ImportPreviewFilter::All;
+        self.import_preview_sort = ImportPreviewSort::KindThenName;
+        self.import_preview_search.clear();
+        self.logs.push(format!(
+            "{} applied import from {} (processed {}, added {}, updated {}, unchanged {})",
+            timestamp_now(),
+            preview.source_path,
+            summary.processed,
+            summary.added,
+            summary.updated,
+            summary.unchanged
+        ));
+        self.record_legacy_import_result(legacy_import_result(
+            "applied",
+            &preview.source_path,
+            summary,
+            "import applied".to_owned(),
+        ));
+    }}
+impl ChatbotAutoApp {
     pub(super) fn dismiss_import_preview(&mut self) {
         if let Some(preview) = self.import_preview.take() {
             self.import_preview_filter = ImportPreviewFilter::All;
@@ -329,10 +357,52 @@ fn import_preview_kind_rank(kind: ImportPreviewKind) -> u8 {
         ImportPreviewKind::Unchanged => 2,
     }
 }
+pub(super) fn import_preview_kind_color(kind: ImportPreviewKind) -> egui::Color32 {
+    match kind {
+        ImportPreviewKind::Add => egui::Color32::LIGHT_GREEN,
+        ImportPreviewKind::Update => egui::Color32::YELLOW,
+        ImportPreviewKind::Unchanged => egui::Color32::LIGHT_GRAY,
+    }
+}
+pub(super) fn empty_import_preview_message(filter: ImportPreviewFilter, search: &str) -> String {
+    let search = search.trim();
+    if !search.is_empty() {
+        return format!("No preview entries match search `{search}`.");
+    }
+
+    match filter {
+        ImportPreviewFilter::All => "No preview entries are available.".to_owned(),
+        ImportPreviewFilter::Add => "No add preview entries are available.".to_owned(),
+        ImportPreviewFilter::Update => "No update preview entries are available.".to_owned(),
+        ImportPreviewFilter::Unchanged => "No unchanged preview entries are available.".to_owned(),
+    }
+}
 pub(super) fn record_legacy_import_result(config: &mut AppConfig, result: LegacyImportResult) {
     config.last_legacy_import_result = Some(result.clone());
     config.legacy_import_history.insert(0, result);
     config
         .legacy_import_history
         .truncate(LEGACY_IMPORT_HISTORY_LIMIT);
+}
+pub(super) fn clear_legacy_import_status(config: &mut AppConfig) {
+    config.last_legacy_import_result = None;
+    config.legacy_import_history.clear();
+}
+pub(super) fn last_legacy_import_result_lines(result: Option<&LegacyImportResult>) -> Vec<String> {
+    let Some(result) = result else {
+        return vec!["No legacy import has run yet.".to_owned()];
+    };
+
+    let mut lines = vec![
+        format!("When: {}", result.recorded_at),
+        format!("Source: {}", result.source_path),
+        format!(
+            "Outcome: {} ({}, {} add, {} update, {} unchanged)",
+            result.outcome, result.processed, result.added, result.updated, result.unchanged
+        ),
+    ];
+    if !result.detail.trim().is_empty() {
+        lines.push(format!("Detail: {}", result.detail));
+    }
+    lines
 }
