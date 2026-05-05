@@ -121,3 +121,71 @@ fn recent_sessions_for_provider(
     let sessions_json_path = data_dir.join("sessions.json");
     session_store::recent_sessions(&sessions_json_path, 10).unwrap_or_default()
 }
+fn filtered_import_preview_entries(
+    entries: &[ImportPreviewEntry],
+    filter: ImportPreviewFilter,
+) -> Vec<&ImportPreviewEntry> {
+    entries
+        .iter()
+        .filter(|entry| filter.matches(entry.kind))
+        .collect()
+}
+fn searched_sorted_filtered_import_preview_entries<'a>(
+    entries: &'a [ImportPreviewEntry],
+    filter: ImportPreviewFilter,
+    sort: ImportPreviewSort,
+    search: &str,
+) -> Vec<&'a ImportPreviewEntry> {
+    let mut entries = filtered_import_preview_entries(entries, filter);
+    if !search.trim().is_empty() {
+        let search = search.trim().to_ascii_lowercase();
+        entries.retain(|entry| {
+            entry.name.to_ascii_lowercase().contains(&search)
+                || entry.provider.to_ascii_lowercase().contains(&search)
+        });
+    }
+    entries.sort_by(|left, right| match sort {
+        ImportPreviewSort::KindThenName => (
+            import_preview_kind_rank(left.kind),
+            left.provider.as_str(),
+            left.name.as_str(),
+        )
+            .cmp(&(
+                import_preview_kind_rank(right.kind),
+                right.provider.as_str(),
+                right.name.as_str(),
+            )),
+        ImportPreviewSort::ProviderThenName => (left.provider.as_str(), left.name.as_str())
+            .cmp(&(right.provider.as_str(), right.name.as_str())),
+        ImportPreviewSort::Name => left.name.as_str().cmp(right.name.as_str()),
+    });
+    entries
+}
+fn import_preview_kind_rank(kind: ImportPreviewKind) -> u8 {
+    match kind {
+        ImportPreviewKind::Add => 0,
+        ImportPreviewKind::Update => 1,
+        ImportPreviewKind::Unchanged => 2,
+    }
+}
+#[allow(dead_code)]
+fn import_preview_kind_color(kind: ImportPreviewKind) -> egui::Color32 {
+    match kind {
+        ImportPreviewKind::Add => egui::Color32::LIGHT_GREEN,
+        ImportPreviewKind::Update => egui::Color32::YELLOW,
+        ImportPreviewKind::Unchanged => egui::Color32::LIGHT_GRAY,
+    }
+}
+fn empty_import_preview_message(filter: ImportPreviewFilter, search: &str) -> String {
+    let search = search.trim();
+    if !search.is_empty() {
+        return format!("No preview entries match search `{search}`.");
+    }
+
+    match filter {
+        ImportPreviewFilter::All => "No preview entries are available.".to_owned(),
+        ImportPreviewFilter::Add => "No add preview entries are available.".to_owned(),
+        ImportPreviewFilter::Update => "No update preview entries are available.".to_owned(),
+        ImportPreviewFilter::Unchanged => "No unchanged preview entries are available.".to_owned(),
+    }
+}
