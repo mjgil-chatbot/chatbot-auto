@@ -151,9 +151,75 @@ impl ChatbotAutoApp {
         }
     }}
 impl ChatbotAutoApp {
+    pub(super) fn dismiss_import_preview(&mut self) {
+        if let Some(preview) = self.import_preview.take() {
+            self.import_preview_filter = ImportPreviewFilter::All;
+            self.import_preview_sort = ImportPreviewSort::KindThenName;
+            self.import_preview_search.clear();
+            self.record_legacy_import_result(legacy_import_result(
+                "dismissed",
+                &preview.source_path,
+                preview.summary,
+                "import preview dismissed".to_owned(),
+            ));
+            self.logs.push(format!(
+                "{} dismissed import preview from {}",
+                timestamp_now(),
+                preview.source_path
+            ));
+        }
+    }}
+impl ChatbotAutoApp {
     pub(super) fn record_legacy_import_result(&mut self, result: LegacyImportResult) {
         record_legacy_import_result(&mut self.config, result);
     }}
+pub(super) fn merge_imported_targets(
+    existing: &mut Vec<TargetConfig>,
+    imported: Vec<TargetConfig>,
+) -> ImportSummary {
+    let mut summary = ImportSummary::default();
+    for imported_target in imported {
+        if let Some(existing_target) = existing.iter_mut().find(|target| {
+            target.name == imported_target.name && target.provider == imported_target.provider
+        }) {
+            let changed = import_managed_fields_changed(existing_target, &imported_target);
+            let enabled = existing_target.enabled;
+            let cooldown_seconds = existing_target.cooldown_seconds;
+            let notes = existing_target.notes.clone();
+            let build_docs_before_continue = existing_target.build_docs_before_continue;
+            let build_docs_completed = existing_target.build_docs_completed;
+            let auto_increment_iterations = existing_target.auto_increment_iterations;
+            let current_iteration = existing_target.current_iteration;
+            let max_iterations = existing_target.max_iterations;
+            let repo_path = existing_target.repo_path.clone();
+            let design_document = existing_target.design_document.clone();
+            let task_document = existing_target.task_document.clone();
+
+            *existing_target = imported_target;
+            existing_target.enabled = enabled;
+            existing_target.cooldown_seconds = cooldown_seconds;
+            existing_target.notes = notes;
+            existing_target.build_docs_before_continue = build_docs_before_continue;
+            existing_target.build_docs_completed = build_docs_completed;
+            existing_target.auto_increment_iterations = auto_increment_iterations;
+            existing_target.current_iteration = current_iteration;
+            existing_target.max_iterations = max_iterations;
+            existing_target.repo_path = repo_path;
+            existing_target.design_document = design_document;
+            existing_target.task_document = task_document;
+            if changed {
+                summary.updated += 1;
+            } else {
+                summary.unchanged += 1;
+            }
+        } else {
+            existing.push(imported_target);
+            summary.added += 1;
+        }
+        summary.processed += 1;
+    }
+    summary
+}
 fn import_managed_fields_changed(existing: &TargetConfig, imported: &TargetConfig) -> bool {
     existing.data_dir != imported.data_dir || existing.continue_text != imported.continue_text
 }
@@ -214,6 +280,53 @@ fn legacy_import_result(
         updated: summary.updated,
         unchanged: summary.unchanged,
         detail,
+    }
+}
+pub(super) fn filtered_import_preview_entries(
+    entries: &[ImportPreviewEntry],
+    filter: ImportPreviewFilter,
+) -> Vec<&ImportPreviewEntry> {
+    entries
+        .iter()
+        .filter(|entry| filter.matches(entry.kind))
+        .collect()
+}
+pub(super) fn searched_sorted_filtered_import_preview_entries<'a>(
+    entries: &'a [ImportPreviewEntry],
+    filter: ImportPreviewFilter,
+    sort: ImportPreviewSort,
+    search: &str,
+) -> Vec<&'a ImportPreviewEntry> {
+    let mut entries = filtered_import_preview_entries(entries, filter);
+    if !search.trim().is_empty() {
+        let search = search.trim().to_ascii_lowercase();
+        entries.retain(|entry| {
+            entry.name.to_ascii_lowercase().contains(&search)
+                || entry.provider.to_ascii_lowercase().contains(&search)
+        });
+    }
+    entries.sort_by(|left, right| match sort {
+        ImportPreviewSort::KindThenName => (
+            import_preview_kind_rank(left.kind),
+            left.provider.as_str(),
+            left.name.as_str(),
+        )
+            .cmp(&(
+                import_preview_kind_rank(right.kind),
+                right.provider.as_str(),
+                right.name.as_str(),
+            )),
+        ImportPreviewSort::ProviderThenName => (left.provider.as_str(), left.name.as_str())
+            .cmp(&(right.provider.as_str(), right.name.as_str())),
+        ImportPreviewSort::Name => left.name.as_str().cmp(right.name.as_str()),
+    });
+    entries
+}
+fn import_preview_kind_rank(kind: ImportPreviewKind) -> u8 {
+    match kind {
+        ImportPreviewKind::Add => 0,
+        ImportPreviewKind::Update => 1,
+        ImportPreviewKind::Unchanged => 2,
     }
 }
 pub(super) fn record_legacy_import_result(config: &mut AppConfig, result: LegacyImportResult) {
