@@ -230,6 +230,10 @@ fn config_snapshot(config: &AppConfig) -> String {
 fn normalized_config_in_place(config: &mut AppConfig) {
     config::normalize_config(config);
 }
+fn normalized_config_clone(config: &mut AppConfig) -> AppConfig {
+    normalized_config_in_place(config);
+    config.clone()
+}
 fn legacy_import_result(
     outcome: &str,
     source_path: &str,
@@ -314,6 +318,17 @@ fn empty_import_preview_message(filter: ImportPreviewFilter, search: &str) -> St
         ImportPreviewFilter::Update => "No update preview entries are available.".to_owned(),
         ImportPreviewFilter::Unchanged => "No unchanged preview entries are available.".to_owned(),
     }
+}
+fn record_legacy_import_result(config: &mut AppConfig, result: LegacyImportResult) {
+    config.last_legacy_import_result = Some(result.clone());
+    config.legacy_import_history.insert(0, result);
+    config
+        .legacy_import_history
+        .truncate(LEGACY_IMPORT_HISTORY_LIMIT);
+}
+fn clear_legacy_import_status(config: &mut AppConfig) {
+    config.last_legacy_import_result = None;
+    config.legacy_import_history.clear();
 }
 fn last_legacy_import_result_lines(result: Option<&LegacyImportResult>) -> Vec<String> {
     let Some(result) = result else {
