@@ -159,6 +159,20 @@ impl Default for TargetConfig {
         }
     }
 }
+pub fn load_or_default(paths: &AppPaths) -> Result<AppConfig> {
+    if !paths.config_path.exists() {
+        let config = AppConfig::default();
+        save(paths, &config)?;
+        return Ok(config);
+    }
+
+    let contents = fs::read_to_string(&paths.config_path)
+        .with_context(|| format!("failed to read {}", paths.config_path.display()))?;
+    let mut config = serde_json::from_str::<AppConfig>(&contents)
+        .with_context(|| format!("failed to parse {}", paths.config_path.display()))?;
+    normalize_config(&mut config);
+    Ok(config)
+}
 pub fn save(paths: &AppPaths, config: &AppConfig) -> Result<()> {
     let mut normalized = config.clone();
     normalize_config(&mut normalized);
@@ -301,6 +315,29 @@ pub fn apply_default_doc_paths(target: &mut TargetConfig) {
     target.design_document = design_document.display().to_string();
     target.task_document = task_document.display().to_string();
 }
+pub fn advance_iteration(target: &mut TargetConfig) {
+    if target.repo_path.as_os_str().is_empty() {
+        return;
+    }
+
+    let next_iteration =
+        next_available_iteration_from(&target.repo_path, target.current_iteration + 1);
+    target.current_iteration = next_iteration;
+    target.max_iterations = target.max_iterations.max(next_iteration);
+    let (design_document, task_document) = iteration_doc_paths(&target.repo_path, next_iteration);
+    target.design_document = design_document.display().to_string();
+    target.task_document = task_document.display().to_string();
+}
+pub fn build_docs_prompt(default_prompt: &str, target: &TargetConfig) -> String {
+    let mut prompt = format!(
+        "{default_prompt}\n\nRepository: {}\nDesign document path: {}\nTask list path: {}\n\nCreate both files under the repo docs folder in this run. Use sequential thinking. After finishing, reply with explicit next steps so the continue loop can resume.",
+        target.repo_path.display(),
+        target.design_document,
+        target.task_document
+    );
+    append_completion_contract(&mut prompt);
+    prompt
+}
 fn append_completion_contract(text: &mut String) {
     const CONTRACT: &str = "If more work remains, you must end with an explicit \"Next Steps:\" section. If all work for this iteration is complete, reply with exactly \"Design Doc Fully Implemented\".";
 
@@ -345,6 +382,73 @@ fn normalize_target(target: &mut TargetConfig) {
         target.max_iterations = target.current_iteration;
     }
 }
+pub fn validate_bootstrap_target(target: &TargetConfig) -> Vec<String> {
+    if !target.build_docs_before_continue {
+        return Vec::new();
+    }
+
+    let mut issues = Vec::new();
+    if target.repo_path.as_os_str().is_empty() {
+        issues.push("repo path is empty".to_owned());
+    }
+    if target.design_document.trim().is_empty() {
+        issues.push("design document path is empty".to_owned());
+    }
+    if target.task_document.trim().is_empty() {
+        issues.push("task document path is empty".to_owned());
+    }
+    if !target.design_document.trim().is_empty()
+        && target.design_document.trim() == target.task_document.trim()
+    {
+        issues.push("design and task document paths must differ".to_owned());
+    }
+
+    if !target.repo_path.as_os_str().is_empty() {
+        let docs_dir = target.repo_path.join("docs");
+        if !target.design_document.trim().is_empty()
+            && !Path::new(target.design_document.trim()).starts_with(&docs_dir)
+        {
+            issues.push("design document is outside the repo docs directory".to_owned());
+        }
+        if !target.task_document.trim().is_empty()
+            && !Path::new(target.task_document.trim()).starts_with(&docs_dir)
+        {
+            issues.push("task document is outside the repo docs directory".to_owned());
+        }
+    }
+
+    if target.build_docs_completed {
+        if !target.design_document.trim().is_empty()
+            && !Path::new(target.design_document.trim()).is_file()
+        {
+            issues.push("design document does not exist".to_owned());
+        }
+        if !target.task_document.trim().is_empty()
+            && !Path::new(target.task_document.trim()).is_file()
+        {
+            issues.push("task document does not exist".to_owned());
+        }
+    }
+
+    issues
+}
+pub fn validate_legacy_watcher_script_path(path: &str) -> Vec<String> {
+    let mut issues = Vec::new();
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        issues.push("legacy watcher import path is empty".to_owned());
+        return issues;
+    }
+
+    let path = Path::new(trimmed);
+    if !path.exists() {
+        issues.push("legacy watcher import path does not exist".to_owned());
+    } else if !path.is_file() {
+        issues.push("legacy watcher import path is not a file".to_owned());
+    }
+
+    issues
+}
 fn next_available_iteration(repo_path: &Path) -> u32 {
     next_available_iteration_from(repo_path, 1)
 }
@@ -377,6 +481,41 @@ pub fn provider_data_dir(provider: &str) -> Option<PathBuf> {
 
     let root = rust_chatbot_shared_root()?;
     Some(root.join(format!(".{provider}-desktop")))
+}
+pub fn discover_provider_data_dirs() -> Vec<(String, PathBuf)> {
+    let Some(root) = rust_chatbot_shared_root() else {
+        return Vec::new();
+    };
+    discover_provider_data_dirs_under(&root)
+}
+fn discover_provider_data_dirs_under(root: &Path) -> Vec<(String, PathBuf)> {
+    let Ok(entries) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+
+    let mut options = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !name.ends_with("-desktop") {
+            continue;
+        }
+
+        let provider = name
+            .trim_start_matches('.')
+            .trim_end_matches("-desktop")
+            .to_owned();
+        options.push((provider, path));
+    }
+
+    options.sort_by(|left, right| left.0.cmp(&right.0));
+    options.dedup_by(|left, right| left.0 == right.0);
+    options
 }
 fn expand_home_path(path: &Path) -> PathBuf {
     PathBuf::from(expand_home_str(&path.display().to_string()))
