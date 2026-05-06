@@ -91,3 +91,13 @@ pub fn load_last_message(session_path: &Path) -> Result<Option<SessionMessage>> 
         content: message.content.clone(),
     }))
 }
+pub fn load_launched_from(session_path: &Path) -> Result<Option<String>> {
+    let contents = fs::read_to_string(session_path)
+        .with_context(|| format!("failed to read {}", session_path.display()))?;
+    let transcript = serde_json::from_str::<TranscriptFile>(&contents)
+        .with_context(|| format!("failed to parse {}", session_path.display()))?;
+    Ok(transcript
+        .launched_from
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty()))
+}

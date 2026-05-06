@@ -192,6 +192,40 @@ impl ChatbotAutoApp {
         self.engine_receiver = Some(receiver);
     }}
 impl ChatbotAutoApp {
+    fn drain_engine_events(&mut self) {
+        let mut finished = false;
+        let mut pending = Vec::new();
+
+        if let Some(receiver) = &self.engine_receiver {
+            while let Ok(event) = receiver.try_recv() {
+                pending.push(event);
+            }
+        }
+
+        for event in pending {
+            match event {
+                EngineEvent::Log(line) => {
+                    if let Err(error) = config::append_log_line(&self.paths.log_path, &line) {
+                        self.logs
+                            .push(format!("{} failed to write log: {error}", timestamp_now()));
+                    }
+                    self.logs.push(line);
+                    if self.logs.len() > 500 {
+                        let drain = self.logs.len() - 500;
+                        self.logs.drain(0..drain);
+                    }
+                }
+                EngineEvent::TargetUpdated(update) => self.apply_update(update),
+                EngineEvent::Finished => finished = true,
+            }
+        }
+
+        if finished {
+            self.engine_running = false;
+            self.engine_receiver = None;
+        }
+    }}
+impl ChatbotAutoApp {
     fn apply_update(&mut self, update: TargetUpdate) {
         let build_docs_completed = update.build_docs_completed;
         let target_override = update.target_override;
@@ -324,9 +358,479 @@ impl ChatbotAutoApp {
         }
     }}
 impl ChatbotAutoApp {
+    fn apply_import_preview(&mut self) {
+        let Some(preview) = self.import_preview.take() else {
+            return;
+        };
+
+        let summary = merge_imported_targets(&mut self.config.targets, preview.imported_targets);
+        self.sync_statuses();
+        self.provider_data_dirs = discover_provider_data_dirs();
+        self.import_preview_filter = ImportPreviewFilter::All;
+        self.import_preview_sort = ImportPreviewSort::KindThenName;
+        self.import_preview_search.clear();
+        self.logs.push(format!(
+            "{} applied import from {} (processed {}, added {}, updated {}, unchanged {})",
+            timestamp_now(),
+            preview.source_path,
+            summary.processed,
+            summary.added,
+            summary.updated,
+            summary.unchanged
+        ));
+        self.record_legacy_import_result(legacy_import_result(
+            "applied",
+            &preview.source_path,
+            summary,
+            "import applied".to_owned(),
+        ));
+    }}
+impl ChatbotAutoApp {
+    fn dismiss_import_preview(&mut self) {
+        if let Some(preview) = self.import_preview.take() {
+            self.import_preview_filter = ImportPreviewFilter::All;
+            self.import_preview_sort = ImportPreviewSort::KindThenName;
+            self.import_preview_search.clear();
+            self.record_legacy_import_result(legacy_import_result(
+                "dismissed",
+                &preview.source_path,
+                preview.summary,
+                "import preview dismissed".to_owned(),
+            ));
+            self.logs.push(format!(
+                "{} dismissed import preview from {}",
+                timestamp_now(),
+                preview.source_path
+            ));
+        }
+    }}
+impl ChatbotAutoApp {
+    fn persist_config_if_needed(&mut self) {
+        normalized_config_in_place(&mut self.config);
+        let snapshot = config_snapshot(&self.config);
+        if snapshot == self.last_saved_config_snapshot {
+            return;
+        }
+
+        if config::save(self.paths.as_ref(), &self.config).is_ok() {
+            self.last_saved_config_snapshot = snapshot;
+        }
+    }}
+impl ChatbotAutoApp {
     fn record_legacy_import_result(&mut self, result: LegacyImportResult) {
         record_legacy_import_result(&mut self.config, result);
     }}
+impl eframe::App for ChatbotAutoApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.drain_engine_events();
+        self.maybe_run_poll();
+        self.refresh_ctl_health();
+
+        egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut self.config.automation_enabled, "Automation");
+                ui.label("Poll interval (seconds)");
+                ui.add(
+                    egui::DragValue::new(&mut self.config.poll_interval_seconds).range(5..=3600),
+                );
+                if ui.button("Check Now").clicked() {
+                    self.last_poll = Instant::now();
+                    self.run_engine(EngineAction::CheckAll);
+                }
+                if ui.button("Save Config").clicked() {
+                    match config::save(self.paths.as_ref(), &self.config) {
+                        Ok(()) => {
+                            self.last_saved_config_snapshot = config_snapshot(&self.config);
+                            self.logs.push(format!(
+                                "{} saved config to {}",
+                                timestamp_now(),
+                                self.paths.config_path.display()
+                            ))
+                        }
+                        Err(error) => self.logs.push(format!(
+                            "{} failed to save config: {error}",
+                            timestamp_now()
+                        )),
+                    }
+                }
+                if ui.button("Reload Config").clicked() {
+                    match config::load_or_default(self.paths.as_ref()) {
+                        Ok(config) => {
+                            self.config = config;
+                            self.sync_statuses();
+                            self.provider_data_dirs = discover_provider_data_dirs();
+                            self.last_saved_config_snapshot = config_snapshot(&self.config);
+                            self.logs.push(format!(
+                                "{} reloaded config from {}",
+                                timestamp_now(),
+                                self.paths.config_path.display()
+                            ));
+                        }
+                        Err(error) => self.logs.push(format!(
+                            "{} failed to reload config: {error}",
+                            timestamp_now()
+                        )),
+                    }
+                }
+                if ui.button("Add Target").clicked() {
+                    self.add_target();
+                }
+                if ui.button("Delete Target").clicked() {
+                    self.delete_selected_target();
+                }
+            });
+            ui.label(&self.status_message);
+            egui::CollapsingHeader::new("Global defaults")
+                .default_open(false)
+                .show(ui, |ui| {
+                    let mut build_docs_prompt_changed = false;
+                    ui.columns(2, |columns| {
+                        columns[0].label("Default continue text");
+                        columns[0].add(
+                            egui::TextEdit::multiline(&mut self.config.default_continue_text)
+                                .desired_rows(6),
+                        );
+                        columns[1].label("Default build design + task-list prompt");
+                        build_docs_prompt_changed = columns[1]
+                            .add(
+                                egui::TextEdit::multiline(
+                                    &mut self.config.default_build_docs_prompt,
+                                )
+                                .desired_rows(6),
+                            )
+                            .changed();
+                    });
+                    if build_docs_prompt_changed {
+                        reset_bootstrap_completion_for_targets(&mut self.config.targets);
+                    }
+                });
+            egui::CollapsingHeader::new("Diagnostics")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.monospace(format!("Config: {}", self.paths.config_path.display()));
+                    ui.monospace(format!("Log file: {}", self.paths.log_path.display()));
+                    ui.monospace(format!("Config dir: {}", self.paths.config_dir.display()));
+                    ui.monospace(format!("State dir: {}", self.paths.log_dir.display()));
+                });
+        });
+
+        egui::SidePanel::right("target_details")
+            .resizable(true)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                ui.heading("Target Details");
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let provider_data_dirs = self.provider_data_dirs.clone();
+                    if let Some(index) = self.selected_target {
+                        if let Some(target) = self.config.targets.get_mut(index) {
+                            let status = &self.statuses[index];
+                            if self.preview_focused_target == Some(index) {
+                                ui.colored_label(
+                                    egui::Color32::LIGHT_BLUE,
+                                    "Focused from import preview",
+                                );
+                                ui.separator();
+                            }
+                            ui.label(format!(
+                                "Last decision: {}",
+                                blank_to_dash(&status.last_decision)
+                            ));
+                            ui.label(format!(
+                                "Last checked: {}",
+                                status
+                                    .last_checked_at
+                                    .map(format_timestamp)
+                                    .unwrap_or_else(|| "-".to_owned())
+                            ));
+                            ui.label(format!(
+                                "Last sent: {}",
+                                status
+                                    .last_sent_at
+                                    .map(format_timestamp)
+                                    .unwrap_or_else(|| "-".to_owned())
+                            ));
+                            ui.label(format!(
+                                "Worker running: {}",
+                                status
+                                    .worker_running
+                                    .map(|value| if value { "yes" } else { "no" })
+                                    .unwrap_or("-")
+                            ));
+                            ui.label(format!(
+                                "Last message role: {}",
+                                status.last_message_role.as_deref().unwrap_or("-")
+                            ));
+                            ui.label(format!(
+                                "Last message preview: {}",
+                                status.last_message_preview.as_deref().unwrap_or("-")
+                            ));
+
+                            ui.separator();
+                            ui.checkbox(&mut target.enabled, "Enabled");
+                            ui.horizontal(|ui| {
+                                ui.label("Provider");
+                                let selected_text = if target.provider.is_empty() {
+                                    "Select provider".to_owned()
+                                } else {
+                                    target.provider.clone()
+                                };
+                                egui::ComboBox::from_id_salt(("provider", index))
+                                    .selected_text(selected_text)
+                                    .show_ui(ui, |ui| {
+                                        for option in &provider_data_dirs {
+                                            if ui
+                                                .selectable_label(
+                                                    target.provider == option.provider,
+                                                    &option.provider,
+                                                )
+                                                .clicked()
+                                            {
+                                                target.provider = option.provider.clone();
+                                                target.data_dir = option.path.clone();
+                                                target.build_docs_completed = false;
+                                            }
+                                        }
+                                    });
+                            });
+                            let recent_sessions =
+                                recent_sessions_for_provider(&provider_data_dirs, &target.provider);
+                            ui.horizontal(|ui| {
+                                ui.label("Name");
+                                let selected_text = if target.name.trim().is_empty() {
+                                    "Select recent chat".to_owned()
+                                } else {
+                                    target.name.clone()
+                                };
+                                egui::ComboBox::from_id_salt(("target_name", index))
+                                    .selected_text(selected_text)
+                                    .show_ui(ui, |ui| {
+                                        for session in &recent_sessions {
+                                            if ui
+                                                .selectable_label(
+                                                    target.name == session.name,
+                                                    &session.name,
+                                                )
+                                                .clicked()
+                                            {
+                                                apply_session_selection(
+                                                    target,
+                                                    &provider_data_dirs,
+                                                    session,
+                                                );
+                                            }
+                                        }
+                                    });
+                            });
+                            if !target.repo_path.as_os_str().is_empty() {
+                                ui.label(format!("Repo: {}", target.repo_path.display()));
+                            }
+                            let build_docs_toggled = ui
+                                .checkbox(
+                                    &mut target.build_docs_before_continue,
+                                    "Build design + task-list before continue loop",
+                                )
+                                .changed();
+                            if build_docs_toggled {
+                                target.build_docs_completed = false;
+                            }
+                            if target.build_docs_before_continue
+                                && (target.design_document.is_empty()
+                                    || target.task_document.is_empty())
+                            {
+                                config::apply_default_doc_paths(target);
+                            }
+                            ui.label(format!(
+                                "Build-doc bootstrap sent: {}",
+                                if target.build_docs_completed {
+                                    "yes"
+                                } else {
+                                    "no"
+                                }
+                            ));
+                            ui.checkbox(
+                                &mut target.auto_increment_iterations,
+                                "Auto increment design/task iteration after completion",
+                            );
+                            ui.horizontal(|ui| {
+                                ui.label("Current iteration");
+                                ui.monospace(target.current_iteration.to_string());
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Max iterations");
+                                ui.add(
+                                    egui::DragValue::new(&mut target.max_iterations)
+                                        .range(target.current_iteration..=1000),
+                                );
+                            });
+                            let bootstrap_issues = config::validate_bootstrap_target(target);
+                            if !bootstrap_issues.is_empty() {
+                                ui.colored_label(
+                                    egui::Color32::YELLOW,
+                                    "Bootstrap validation issues:",
+                                );
+                                for issue in bootstrap_issues {
+                                    ui.label(format!("- {issue}"));
+                                }
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label("Cooldown");
+                                ui.add(
+                                    egui::DragValue::new(&mut target.cooldown_seconds)
+                                        .range(0..=86400),
+                                );
+                            });
+                            ui.label("Continue text");
+                            ui.add(
+                                egui::TextEdit::multiline(&mut target.continue_text)
+                                    .desired_rows(5),
+                            );
+                            if ui.button("Use Default Continue Text").clicked() {
+                                target.continue_text = self.config.default_continue_text.clone();
+                            }
+                            ui.label("Design document");
+                            let previous_design_document = target.design_document.clone();
+                            let design_document_changed = ui
+                                .text_edit_singleline(&mut target.design_document)
+                                .changed();
+                            ui.label("Task document");
+                            let previous_task_document = target.task_document.clone();
+                            let task_document_changed =
+                                ui.text_edit_singleline(&mut target.task_document).changed();
+                            if build_docs_paths_changed(
+                                design_document_changed,
+                                task_document_changed,
+                                &previous_design_document,
+                                &target.design_document,
+                                &previous_task_document,
+                                &target.task_document,
+                            ) {
+                                target.build_docs_completed = false;
+                            }
+                            ui.label("Composed continue text");
+                            let mut preview = config::build_continue_text(
+                                &self.config.default_continue_text,
+                                target,
+                            );
+                            if ui.button("Copy composed continue text").clicked() {
+                                ui.ctx().copy_text(preview.clone());
+                            }
+                            ui.add(
+                                egui::TextEdit::multiline(&mut preview)
+                                    .desired_rows(8)
+                                    .interactive(false),
+                            );
+                            ui.label("Notes");
+                            ui.add(egui::TextEdit::multiline(&mut target.notes).desired_rows(4));
+                        }
+                    } else {
+                        ui.label("No target selected.");
+                    }
+                });
+            });
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("Targets");
+            ui.separator();
+            let logs_height = 180.0;
+            let targets_height = (ui.available_height() - logs_height - 48.0).max(140.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), targets_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("targets_scroll")
+                        .show(ui, |ui| {
+                            let mut queued_action = None;
+                            egui::Grid::new("targets_grid")
+                                .num_columns(6)
+                                .min_col_width(70.0)
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    ui.strong("Enabled");
+                                    ui.strong("Target");
+                                    ui.strong("Session");
+                                    ui.strong("Decision");
+                                    ui.strong("Checked");
+                                    ui.strong("Actions");
+                                    ui.end_row();
+
+                                    for (index, target) in
+                                        self.config.targets.iter_mut().enumerate()
+                                    {
+                                        let status = &self.statuses[index];
+                                        ui.checkbox(&mut target.enabled, "");
+                                        let label = target_list_label(
+                                            &target.provider,
+                                            &target.name,
+                                            self.preview_focused_target == Some(index),
+                                        );
+                                        if ui
+                                            .selectable_label(
+                                                self.selected_target == Some(index),
+                                                label,
+                                            )
+                                            .clicked()
+                                        {
+                                            if self.preview_focused_target != Some(index) {
+                                                self.preview_focused_target = None;
+                                            }
+                                            self.selected_target = Some(index);
+                                        }
+                                        ui.label(status.session_id.as_deref().unwrap_or("-"));
+                                        ui.label(if status.last_decision.is_empty() {
+                                            "-"
+                                        } else {
+                                            &status.last_decision
+                                        });
+                                        ui.label(
+                                            status
+                                                .last_checked_at
+                                                .map(format_timestamp)
+                                                .unwrap_or_else(|| "-".to_owned()),
+                                        );
+                                        ui.horizontal(|ui| {
+                                            if ui.button("Check").clicked() {
+                                                queued_action =
+                                                    Some(EngineAction::CheckTarget(index));
+                                            }
+                                            if ui.button("Send").clicked() {
+                                                queued_action =
+                                                    Some(EngineAction::ForceSend(index));
+                                            }
+                                        });
+                                        ui.end_row();
+                                    }
+                                });
+                            if let Some(action) = queued_action {
+                                self.run_engine(action);
+                            }
+                        });
+                },
+            );
+            ui.separator();
+            ui.heading("Recent Logs");
+            ui.separator();
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), logs_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("recent_logs_scroll")
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            for line in &self.logs {
+                                ui.monospace(line);
+                            }
+                        });
+                },
+            );
+        });
+
+        self.persist_config_if_needed();
+        ctx.request_repaint_after(Duration::from_millis(250));
+    }
+}
 fn format_timestamp(timestamp: DateTime<Utc>) -> String {
     timestamp
         .with_timezone(&Local)
@@ -357,6 +861,36 @@ fn recent_sessions_for_provider(
     };
     let sessions_json_path = data_dir.join("sessions.json");
     session_store::recent_sessions(&sessions_json_path, 10).unwrap_or_default()
+}
+fn apply_session_selection(
+    target: &mut TargetConfig,
+    provider_data_dirs: &[ProviderDataDir],
+    session: &RecentSession,
+) {
+    target.name = session.name.clone();
+    target.build_docs_completed = false;
+
+    let Some(data_dir) = provider_path(provider_data_dirs, &target.provider) else {
+        return;
+    };
+    target.data_dir = data_dir.to_path_buf();
+
+    let session_path = data_dir
+        .join("sessions")
+        .join(format!("{}.json", session.id));
+    if let Ok(Some(launched_from)) = session_store::load_launched_from(&session_path) {
+        let repo_path = std::path::PathBuf::from(launched_from);
+        if target.repo_path != repo_path {
+            target.repo_path = repo_path;
+            if target.build_docs_before_continue {
+                config::apply_default_doc_paths(target);
+            }
+        } else if target.build_docs_before_continue
+            && (target.design_document.is_empty() || target.task_document.is_empty())
+        {
+            config::apply_default_doc_paths(target);
+        }
+    }
 }
 fn discover_provider_data_dirs() -> Vec<ProviderDataDir> {
     config::discover_provider_data_dirs()
