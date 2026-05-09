@@ -1,6 +1,8 @@
 use std::sync::Arc;
+
 use super::*;
 use crate::config::AppPaths;
+
 fn temp_app_paths() -> AppPaths {
     let root = std::env::temp_dir().join(format!(
         "chatbot-auto-app-tests-{}-{}",
@@ -21,6 +23,7 @@ fn temp_app_paths() -> AppPaths {
         log_dir,
     }
 }
+
 #[test]
 fn build_docs_paths_changed_detects_actual_document_edits() {
     assert!(build_docs_paths_changed(
@@ -48,6 +51,7 @@ fn build_docs_paths_changed_detects_actual_document_edits() {
         "/tmp/task.md",
     ));
 }
+
 #[test]
 fn normalized_config_clone_expands_paths_and_fills_provider_dirs() {
     let home = std::env::var_os("HOME")
@@ -81,6 +85,7 @@ fn normalized_config_clone_expands_paths_and_fills_provider_dirs() {
     assert_eq!(normalized.targets[0].repo_path, home.join("git/demo"));
     assert_eq!(config.targets[0].repo_path, home.join("git/demo"));
 }
+
 #[test]
 fn persist_config_if_needed_normalizes_before_save() {
     let paths = temp_app_paths();
@@ -112,6 +117,7 @@ fn persist_config_if_needed_normalizes_before_save() {
     assert!(saved.contains(".rust-chatbot/.codex-desktop"));
     assert!(saved.contains("\"preview_show_stable_ids\": true"));
 }
+
 #[test]
 fn reset_bootstrap_completion_only_resets_bootstrap_targets() {
     let mut targets = vec![
@@ -131,4 +137,123 @@ fn reset_bootstrap_completion_only_resets_bootstrap_targets() {
 
     assert!(!targets[0].build_docs_completed);
     assert!(targets[1].build_docs_completed);
+}
+
+#[test]
+fn merge_imported_targets_updates_matching_target_but_preserves_local_fields() {
+    let mut existing = vec![TargetConfig {
+        name: "ziglua".to_owned(),
+        provider: "minimax".to_owned(),
+        data_dir: "/old/minimax".into(),
+        continue_text: "old".to_owned(),
+        enabled: false,
+        cooldown_seconds: 42,
+        notes: "keep me".to_owned(),
+        repo_path: "/repo".into(),
+        design_document: "/repo/docs/design.md".to_owned(),
+        task_document: "/repo/docs/task.md".to_owned(),
+        build_docs_before_continue: true,
+        build_docs_completed: true,
+        auto_increment_iterations: true,
+        current_iteration: 2,
+        max_iterations: 5,
+        ..TargetConfig::default()
+    }];
+
+    let summary = merge_imported_targets(
+        &mut existing,
+        vec![TargetConfig {
+            name: "ziglua".to_owned(),
+            provider: "minimax".to_owned(),
+            data_dir: "/new/minimax".into(),
+            continue_text: "new".to_owned(),
+            ..TargetConfig::default()
+        }],
+    );
+
+    assert_eq!(
+        summary,
+        ImportSummary {
+            processed: 1,
+            added: 0,
+            updated: 1,
+            unchanged: 0,
+        }
+    );
+    assert_eq!(existing.len(), 1);
+    assert_eq!(
+        existing[0].data_dir,
+        std::path::PathBuf::from("/new/minimax")
+    );
+    assert_eq!(existing[0].continue_text, "new");
+    assert!(!existing[0].enabled);
+    assert_eq!(existing[0].cooldown_seconds, 42);
+    assert_eq!(existing[0].notes, "keep me");
+    assert_eq!(existing[0].repo_path, std::path::PathBuf::from("/repo"));
+    assert_eq!(existing[0].design_document, "/repo/docs/design.md");
+    assert_eq!(existing[0].task_document, "/repo/docs/task.md");
+    assert!(existing[0].build_docs_before_continue);
+    assert!(existing[0].build_docs_completed);
+    assert!(existing[0].auto_increment_iterations);
+    assert_eq!(existing[0].current_iteration, 2);
+    assert_eq!(existing[0].max_iterations, 5);
+}
+
+#[test]
+fn merge_imported_targets_appends_new_target() {
+    let mut existing = Vec::new();
+    let summary = merge_imported_targets(
+        &mut existing,
+        vec![TargetConfig {
+            name: "chatbot-auto".to_owned(),
+            provider: "codex".to_owned(),
+            data_dir: "/tmp/codex".into(),
+            continue_text: "continue".to_owned(),
+            ..TargetConfig::default()
+        }],
+    );
+
+    assert_eq!(
+        summary,
+        ImportSummary {
+            processed: 1,
+            added: 1,
+            updated: 0,
+            unchanged: 0,
+        }
+    );
+    assert_eq!(existing.len(), 1);
+    assert_eq!(existing[0].name, "chatbot-auto");
+}
+
+#[test]
+fn merge_imported_targets_counts_unchanged_matching_target() {
+    let mut existing = vec![TargetConfig {
+        name: "ziglua".to_owned(),
+        provider: "minimax".to_owned(),
+        data_dir: "/tmp/minimax".into(),
+        continue_text: "continue".to_owned(),
+        ..TargetConfig::default()
+    }];
+
+    let summary = merge_imported_targets(
+        &mut existing,
+        vec![TargetConfig {
+            name: "ziglua".to_owned(),
+            provider: "minimax".to_owned(),
+            data_dir: "/tmp/minimax".into(),
+            continue_text: "continue".to_owned(),
+            ..TargetConfig::default()
+        }],
+    );
+
+    assert_eq!(
+        summary,
+        ImportSummary {
+            processed: 1,
+            added: 0,
+            updated: 0,
+            unchanged: 1,
+        }
+    );
 }
