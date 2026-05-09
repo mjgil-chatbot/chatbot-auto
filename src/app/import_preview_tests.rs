@@ -207,3 +207,129 @@ fn searched_sorted_filtered_import_preview_entries_match_name_or_provider() {
     assert_eq!(by_provider.len(), 1);
     assert_eq!(by_provider[0].provider, "codex");
 }
+#[test]
+fn empty_import_preview_message_distinguishes_search_from_filter_empty_states() {
+    assert_eq!(
+        empty_import_preview_message(ImportPreviewFilter::All, "zig"),
+        "No preview entries match search `zig`."
+    );
+    assert_eq!(
+        empty_import_preview_message(ImportPreviewFilter::Update, ""),
+        "No update preview entries are available."
+    );
+}
+#[test]
+fn last_legacy_import_result_lines_include_summary_and_detail() {
+    let lines = last_legacy_import_result_lines(Some(&crate::config::LegacyImportResult {
+        recorded_at: "2026-05-05 09:00:00".to_owned(),
+        source_path: "/tmp/watcher.sh".to_owned(),
+        outcome: "applied".to_owned(),
+        processed: 3,
+        added: 1,
+        updated: 1,
+        unchanged: 1,
+        detail: "import applied".to_owned(),
+    }));
+
+    assert_eq!(lines.len(), 4);
+    assert!(lines[0].contains("2026-05-05 09:00:00"));
+    assert!(lines[1].contains("/tmp/watcher.sh"));
+    assert!(lines[2].contains("applied"));
+    assert!(lines[3].contains("import applied"));
+}
+#[test]
+fn last_legacy_import_result_lines_show_empty_state_without_result() {
+    let lines = last_legacy_import_result_lines(None);
+    assert_eq!(lines, vec!["No legacy import has run yet.".to_owned()]);
+}
+#[test]
+fn legacy_import_history_lines_show_recent_outcomes() {
+    let lines = legacy_import_history_lines(
+        &[
+            crate::config::LegacyImportResult {
+                recorded_at: "2026-05-05 09:05:00".to_owned(),
+                source_path: "/tmp/a.sh".to_owned(),
+                outcome: "applied".to_owned(),
+                processed: 2,
+                added: 1,
+                updated: 1,
+                unchanged: 0,
+                detail: "import applied".to_owned(),
+            },
+            crate::config::LegacyImportResult {
+                recorded_at: "2026-05-05 09:00:00".to_owned(),
+                source_path: "/tmp/b.sh".to_owned(),
+                outcome: "previewed".to_owned(),
+                processed: 3,
+                added: 1,
+                updated: 1,
+                unchanged: 1,
+                detail: "import preview prepared".to_owned(),
+            },
+        ],
+        LEGACY_IMPORT_HISTORY_COMPACT_LIMIT,
+    );
+
+    assert_eq!(lines[0], "Recent import outcomes:");
+    assert!(lines[1].contains("applied"));
+    assert!(lines[2].contains("previewed"));
+}
+#[test]
+fn legacy_import_history_lines_respect_requested_limit() {
+    let history = vec![
+        crate::config::LegacyImportResult {
+            recorded_at: "2026-05-05 09:10:00".to_owned(),
+            source_path: "/tmp/a.sh".to_owned(),
+            outcome: "applied".to_owned(),
+            processed: 2,
+            added: 1,
+            updated: 1,
+            unchanged: 0,
+            detail: "import applied".to_owned(),
+        },
+        crate::config::LegacyImportResult {
+            recorded_at: "2026-05-05 09:05:00".to_owned(),
+            source_path: "/tmp/b.sh".to_owned(),
+            outcome: "previewed".to_owned(),
+            processed: 3,
+            added: 1,
+            updated: 1,
+            unchanged: 1,
+            detail: "import preview prepared".to_owned(),
+        },
+        crate::config::LegacyImportResult {
+            recorded_at: "2026-05-05 09:00:00".to_owned(),
+            source_path: "/tmp/c.sh".to_owned(),
+            outcome: "dismissed".to_owned(),
+            processed: 3,
+            added: 1,
+            updated: 1,
+            unchanged: 1,
+            detail: "import preview dismissed".to_owned(),
+        },
+    ];
+
+    let lines = legacy_import_history_lines(&history, 2);
+
+    assert_eq!(lines.len(), 3);
+    assert!(lines[1].contains("/tmp/a.sh"));
+    assert!(lines[2].contains("/tmp/b.sh"));
+}
+#[test]
+fn preview_entry_identity_and_stable_id_helpers_format_expected_text() {
+    let entry = ImportPreviewEntry {
+        name: "chatbot-auto".to_owned(),
+        provider: "codex".to_owned(),
+        kind: ImportPreviewKind::Add,
+    };
+
+    assert_eq!(preview_entry_identity_text(&entry), "codex / chatbot-auto");
+    assert_eq!(
+        preview_entry_stable_id_label(&entry),
+        "id=codex::chatbot-auto"
+    );
+    assert_eq!(
+        preview_entry_summary_text(&entry),
+        "[Add] codex / chatbot-auto - new target"
+    );
+}
