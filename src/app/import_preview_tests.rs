@@ -333,3 +333,139 @@ fn preview_entry_identity_and_stable_id_helpers_format_expected_text() {
         "[Add] codex / chatbot-auto - new target"
     );
 }
+#[test]
+fn visible_preview_summary_text_joins_multiple_entries() {
+    let first = ImportPreviewEntry {
+        name: "chatbot-auto".to_owned(),
+        provider: "codex".to_owned(),
+        kind: ImportPreviewKind::Add,
+    };
+    let second = ImportPreviewEntry {
+        name: "ziglua".to_owned(),
+        provider: "minimax".to_owned(),
+        kind: ImportPreviewKind::Update,
+    };
+
+    assert_eq!(
+        visible_preview_summary_text(&[&first, &second]),
+        "[Add] codex / chatbot-auto - new target\n[Update] minimax / ziglua - managed fields changed"
+    );
+}
+#[test]
+fn preview_review_snapshot_text_includes_source_counts_and_visible_rows() {
+    let first = ImportPreviewEntry {
+        name: "chatbot-auto".to_owned(),
+        provider: "codex".to_owned(),
+        kind: ImportPreviewKind::Add,
+    };
+    let second = ImportPreviewEntry {
+        name: "ziglua".to_owned(),
+        provider: "minimax".to_owned(),
+        kind: ImportPreviewKind::Update,
+    };
+    let text = preview_review_snapshot_text(
+        "/tmp/watcher.sh",
+        ImportSummary {
+            processed: 3,
+            added: 1,
+            updated: 1,
+            unchanged: 1,
+        },
+        ImportPreviewFilter::Update,
+        ImportPreviewSort::ProviderThenName,
+        "zig",
+        &[&first, &second],
+    );
+
+    assert!(text.contains("Source: /tmp/watcher.sh"));
+    assert!(text.contains("Filter: Update"));
+    assert!(text.contains("Sort: Provider then Name"));
+    assert!(text.contains("Search: zig"));
+    assert!(text.contains("Processed 3 targets: 1 add, 1 update, 1 unchanged"));
+    assert!(text.contains("[Add] codex / chatbot-auto - new target | id=codex::chatbot-auto"));
+    assert!(
+        text.contains("[Update] minimax / ziglua - managed fields changed | id=minimax::ziglua")
+    );
+}
+#[test]
+fn preview_review_snapshot_markdown_includes_structured_sections() {
+    let first = ImportPreviewEntry {
+        name: "chatbot-auto".to_owned(),
+        provider: "codex".to_owned(),
+        kind: ImportPreviewKind::Add,
+    };
+    let text = preview_review_snapshot_markdown(
+        "/tmp/watcher.sh",
+        ImportSummary {
+            processed: 1,
+            added: 1,
+            updated: 0,
+            unchanged: 0,
+        },
+        ImportPreviewFilter::All,
+        ImportPreviewSort::Name,
+        "",
+        &[&first],
+    );
+
+    assert!(text.contains("# Legacy Import Review Snapshot"));
+    assert!(text.contains("- Source: `/tmp/watcher.sh`"));
+    assert!(text.contains("- Search: `(none)`"));
+    assert!(text.contains("## Visible Entries"));
+    assert!(text.contains("- [Add] codex / chatbot-auto - new target (`codex::chatbot-auto`)"));
+}
+#[test]
+fn preview_review_snapshot_json_includes_machine_readable_fields() {
+    let first = ImportPreviewEntry {
+        name: "chatbot-auto".to_owned(),
+        provider: "codex".to_owned(),
+        kind: ImportPreviewKind::Add,
+    };
+    let text = preview_review_snapshot_json(
+        "/tmp/watcher.sh",
+        ImportSummary {
+            processed: 1,
+            added: 1,
+            updated: 0,
+            unchanged: 0,
+        },
+        ImportPreviewFilter::All,
+        ImportPreviewSort::Name,
+        "",
+        &[&first],
+    );
+
+    assert!(text.contains("\"source_path\": \"/tmp/watcher.sh\""));
+    assert!(text.contains("\"filter\": \"All\""));
+    assert!(text.contains("\"sort\": \"Name\""));
+    assert!(text.contains("\"search\": \"(none)\""));
+    assert!(text.contains("\"id\": \"codex::chatbot-auto\""));
+    assert!(text.contains("\"kind\": \"Add\""));
+    assert!(text.contains("\"detail\": \"new target\""));
+    assert!(text.contains("\"provider\": \"codex\""));
+    assert!(text.contains("\"identity\": \"codex / chatbot-auto\""));
+    assert!(text.contains("\"summary\": \"[Add] codex / chatbot-auto - new target\""));
+}
+#[test]
+fn target_list_label_marks_preview_focused_targets() {
+    assert_eq!(
+        target_list_label("codex", "chatbot-auto", true),
+        "codex / chatbot-auto [focused]"
+    );
+    assert_eq!(
+        target_list_label("codex", "chatbot-auto", false),
+        "codex / chatbot-auto"
+    );
+}
+#[test]
+fn import_preview_kind_metadata_describes_review_state() {
+    assert_eq!(ImportPreviewKind::Add.metadata(), ("Add", "new target"));
+    assert_eq!(
+        ImportPreviewKind::Update.metadata(),
+        ("Update", "managed fields changed")
+    );
+    assert_eq!(
+        ImportPreviewKind::Unchanged.metadata(),
+        ("Unchanged", "already matches import")
+    );
+}
