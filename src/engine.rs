@@ -1,22 +1,27 @@
 use std::path::Path;
 use std::sync::mpsc::Sender;
+
 use chrono::{DateTime, Utc};
+
 use crate::chatbot_ctl;
 use crate::config::{self, AppConfig, TargetConfig};
 use crate::heuristics;
 use crate::session_store::{self, SessionMessage};
+
 #[derive(Clone, Debug)]
 pub enum EngineAction {
     CheckAll,
     CheckTarget(usize),
     ForceSend(usize),
 }
+
 #[derive(Clone, Debug)]
 pub enum TargetDecision {
     Sent,
     Skipped(String),
     Error(String),
 }
+
 #[derive(Clone, Debug)]
 pub struct TargetUpdate {
     pub index: usize,
@@ -30,12 +35,14 @@ pub struct TargetUpdate {
     pub decision: TargetDecision,
     pub checked_at: DateTime<Utc>,
 }
+
 #[derive(Clone, Debug)]
 pub enum EngineEvent {
     Log(String),
     TargetUpdated(TargetUpdate),
     Finished,
 }
+
 struct EngineDeps {
     session_id_for_name: fn(&Path, &str) -> anyhow::Result<Option<String>>,
     worker_running_for_chat: fn(&Path, &str) -> anyhow::Result<bool>,
@@ -45,7 +52,9 @@ struct EngineDeps {
     rename_chat: fn(&Path, &str, &str) -> anyhow::Result<()>,
     kill_chat: fn(&Path, &str) -> anyhow::Result<()>,
 }
+
 const NEXT_STEPS_OR_COMPLETION_PROMPT: &str = "Reply with one of the following only:\n\n1. An explicit \"Next Steps:\" section if more work remains.\n2. Exactly \"Design Doc Fully Implemented\" if the current iteration is complete.";
+
 pub fn run(
     action: EngineAction,
     config: AppConfig,
@@ -77,6 +86,7 @@ pub fn run(
 
     let _ = sender.send(EngineEvent::Finished);
 }
+
 fn process_target(
     index: usize,
     config: &AppConfig,
@@ -94,6 +104,7 @@ fn process_target(
     };
     process_target_with_deps(index, config, last_sent_at, action, &deps)
 }
+
 fn process_target_with_deps(
     index: usize,
     config: &AppConfig,
@@ -831,6 +842,7 @@ fn process_target_with_deps(
         ),
     };
 }
+
 fn update_with_message(
     index: usize,
     session_id: String,
@@ -859,6 +871,7 @@ fn update_with_message(
         checked_at,
     }
 }
+
 fn truncate_preview(content: &str) -> String {
     const LIMIT: usize = 140;
     let flattened = content.replace('\n', " ");
@@ -869,6 +882,7 @@ fn truncate_preview(content: &str) -> String {
     let truncated: String = flattened.chars().take(LIMIT).collect();
     format!("{truncated}...")
 }
+
 fn format_log_line(target: &TargetConfig, update: &TargetUpdate) -> String {
     let decision = match &update.decision {
         TargetDecision::Sent => "sent continue".to_owned(),
@@ -883,4 +897,364 @@ fn format_log_line(target: &TargetConfig, update: &TargetUpdate) -> String {
         target.name,
         decision
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn run_reports_invalid_target_actions_and_finishes_without_panicking() {
+        for action in [
+            EngineAction::CheckTarget(usize::MAX),
+            EngineAction::ForceSend(usize::MAX),
+        ] {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            run(action, AppConfig::default(), vec![], sender);
+            let events: Vec<_> = receiver.try_iter().collect();
+            assert_eq!(events.len(), 3);
+            assert!(
+                matches!(&events[0], EngineEvent::Log(line) if line.contains("target index out of range"))
+            );
+            assert!(matches!(&events[1], EngineEvent::TargetUpdated(update)
+                if update.index == usize::MAX
+                    && matches!(&update.decision, TargetDecision::Error(message) if message == "target index out of range")));
+            assert!(matches!(events[2], EngineEvent::Finished));
+        }
+    }
+
+    use super::*;
+    use anyhow::anyhow;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+
+    #[derive(Clone, Debug)]
+    struct EngineTestState {
+        session_id: Option<String>,
+        worker_running: bool,
+        last_message: Option<SessionMessage>,
+        send_error: Option<String>,
+        sent_texts: Vec<String>,
+    }
+
+    fn state_cell() -> &'static Mutex<EngineTestState> {
+        static CELL: OnceLock<Mutex<EngineTestState>> = OnceLock::new();
+        CELL.get_or_init(|| {
+            Mutex::new(EngineTestState {
+                session_id: Some("chat-123".to_string()),
+                worker_running: false,
+                last_message: Some(SessionMessage {
+                    is_user: false,
+                    content: "Next Steps:\n1. Continue with repo setup".to_string(),
+                }),
+                send_error: None,
+                sent_texts: Vec::new(),
+            })
+        })
+    }
+
+    fn test_guard() -> &'static Mutex<()> {
+        static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+        GUARD.get_or_init(|| Mutex::new(()))
+    }
+
+    fn with_state<R>(f: impl FnOnce(&mut EngineTestState) -> R) -> R {
+        let mut guard = state_cell()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        f(&mut guard)
+    }
+
+    fn reset_state() {
+        with_state(|state| {
+            *state = EngineTestState {
+                session_id: Some("chat-123".to_string()),
+                worker_running: false,
+                last_message: Some(SessionMessage {
+                    is_user: false,
+                    content: "Next Steps:\n1. Continue with repo setup".to_string(),
+                }),
+                send_error: None,
+                sent_texts: Vec::new(),
+            };
+        });
+    }
+
+    fn fake_session_id_for_name(_path: &Path, _name: &str) -> anyhow::Result<Option<String>> {
+        Ok(with_state(|state| state.session_id.clone()))
+    }
+
+    fn fake_worker_running_for_chat(_path: &Path, _chat_id: &str) -> anyhow::Result<bool> {
+        Ok(with_state(|state| state.worker_running))
+    }
+
+    fn fake_load_last_message(_path: &Path) -> anyhow::Result<Option<SessionMessage>> {
+        Ok(with_state(|state| state.last_message.clone()))
+    }
+
+    fn fake_send_continue(
+        _path: &Path,
+        _provider: &str,
+        _chat_id: &str,
+        text: &str,
+    ) -> anyhow::Result<()> {
+        with_state(|state| {
+            state.sent_texts.push(text.to_string());
+            state.send_error.clone()
+        })
+        .map_or(Ok(()), |error| Err(anyhow!(error)))
+    }
+
+    fn fake_create_chat(_path: &Path, _provider: &str, _name: &str) -> anyhow::Result<String> {
+        Ok("verify-chat-123".to_string())
+    }
+
+    fn fake_rename_chat(_path: &Path, _chat_id: &str, _name: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn fake_kill_chat(_path: &Path, _chat_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn test_deps() -> EngineDeps {
+        EngineDeps {
+            session_id_for_name: fake_session_id_for_name,
+            worker_running_for_chat: fake_worker_running_for_chat,
+            load_last_message: fake_load_last_message,
+            send_continue: fake_send_continue,
+            create_chat: fake_create_chat,
+            rename_chat: fake_rename_chat,
+            kill_chat: fake_kill_chat,
+        }
+    }
+
+    fn bootstrap_target() -> TargetConfig {
+        TargetConfig {
+            name: "ziglua".to_string(),
+            provider: "codex".to_string(),
+            data_dir: PathBuf::from("/tmp/provider"),
+            repo_path: PathBuf::from("/tmp/repo"),
+            design_document: "/tmp/repo/docs/design.md".to_string(),
+            task_document: "/tmp/repo/docs/task.md".to_string(),
+            build_docs_before_continue: true,
+            ..TargetConfig::default()
+        }
+    }
+
+    fn bootstrap_config() -> AppConfig {
+        AppConfig {
+            chatbot_ctl_path: PathBuf::from("/tmp/chatbot-ctl"),
+            default_build_docs_prompt: "bootstrap docs".to_string(),
+            targets: vec![bootstrap_target()],
+            ..AppConfig::default()
+        }
+    }
+
+    #[test]
+    fn bootstrap_check_sends_build_docs_prompt_first() {
+        let _guard = test_guard()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_state();
+        let config = bootstrap_config();
+
+        let update =
+            process_target_with_deps(0, &config, &[None], &EngineAction::CheckAll, &test_deps());
+
+        assert!(matches!(update.decision, TargetDecision::Sent));
+        assert_eq!(update.build_docs_completed, Some(true));
+        let state = with_state(|state| state.clone());
+        assert_eq!(state.sent_texts.len(), 1);
+        assert_eq!(
+            state.sent_texts[0],
+            config::build_docs_prompt(&config.default_build_docs_prompt, &config.targets[0])
+        );
+    }
+
+    #[test]
+    fn bootstrap_check_skips_when_repo_path_is_missing() {
+        let _guard = test_guard()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_state();
+        let mut config = bootstrap_config();
+        config.targets[0].repo_path = PathBuf::new();
+
+        let update =
+            process_target_with_deps(0, &config, &[None], &EngineAction::CheckAll, &test_deps());
+
+        match update.decision {
+            TargetDecision::Skipped(reason) => {
+                assert!(reason.contains("repo path is empty"));
+            }
+            other => panic!("expected skip, got {other:?}"),
+        }
+        assert_eq!(update.build_docs_completed, None);
+        assert!(with_state(|state| state.sent_texts.is_empty()));
+    }
+
+    #[test]
+    fn bootstrap_check_skips_when_design_document_path_is_missing() {
+        let _guard = test_guard()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_state();
+        let mut config = bootstrap_config();
+        config.targets[0].design_document.clear();
+
+        let update =
+            process_target_with_deps(0, &config, &[None], &EngineAction::CheckAll, &test_deps());
+
+        match update.decision {
+            TargetDecision::Skipped(reason) => {
+                assert!(reason.contains("design document path is empty"));
+            }
+            other => panic!("expected skip, got {other:?}"),
+        }
+        assert_eq!(update.build_docs_completed, None);
+        assert!(with_state(|state| state.sent_texts.is_empty()));
+    }
+
+    #[test]
+    fn bootstrap_check_reports_send_errors() {
+        let _guard = test_guard()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_state();
+        with_state(|state| state.send_error = Some("send failed".to_string()));
+        let config = bootstrap_config();
+
+        let update =
+            process_target_with_deps(0, &config, &[None], &EngineAction::CheckAll, &test_deps());
+
+        match update.decision {
+            TargetDecision::Error(error) => assert!(error.contains("send failed")),
+            other => panic!("expected error, got {other:?}"),
+        }
+        assert_eq!(update.build_docs_completed, None);
+        assert_eq!(with_state(|state| state.sent_texts.len()), 1);
+    }
+
+    #[test]
+    fn completion_with_auto_increment_sends_next_iteration_prompt() {
+        let _guard = test_guard()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_state();
+        with_state(|state| {
+            state.last_message = Some(SessionMessage {
+                is_user: false,
+                content: "All work is complete.".to_string(),
+            });
+        });
+        let mut config = bootstrap_config();
+        config.targets[0].build_docs_completed = true;
+        config.targets[0].auto_increment_iterations = true;
+        config.targets[0].current_iteration = 1;
+        config.targets[0].max_iterations = 3;
+
+        let update =
+            process_target_with_deps(0, &config, &[None], &EngineAction::CheckAll, &test_deps());
+
+        assert!(matches!(update.decision, TargetDecision::Sent));
+        let next_target = update
+            .target_override
+            .expect("target override should carry next iteration state");
+        assert_eq!(next_target.current_iteration, 2);
+        assert_eq!(next_target.design_document, "/tmp/repo/docs/design-2.md");
+        assert_eq!(next_target.task_document, "/tmp/repo/docs/task-2.md");
+        let state = with_state(|state| state.clone());
+        assert_eq!(state.sent_texts.len(), 1);
+        assert!(state.sent_texts[0].contains("design-2.md"));
+        assert!(state.sent_texts[0].contains("task-2.md"));
+    }
+
+    #[test]
+    fn completion_with_auto_increment_stops_at_max_iterations() {
+        let _guard = test_guard()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_state();
+        with_state(|state| {
+            state.last_message = Some(SessionMessage {
+                is_user: false,
+                content: "No more work remains.".to_string(),
+            });
+        });
+        let mut config = bootstrap_config();
+        config.targets[0].build_docs_completed = true;
+        config.targets[0].auto_increment_iterations = true;
+        config.targets[0].current_iteration = 2;
+        config.targets[0].max_iterations = 2;
+
+        let update =
+            process_target_with_deps(0, &config, &[None], &EngineAction::CheckAll, &test_deps());
+
+        match update.decision {
+            TargetDecision::Skipped(reason) => {
+                assert!(reason.contains("max iterations reached"));
+            }
+            other => panic!("expected skip, got {other:?}"),
+        }
+        assert!(update.target_override.is_none());
+        assert!(with_state(|state| state.sent_texts.is_empty()));
+    }
+
+    #[test]
+    fn ambiguous_assistant_reply_requests_next_steps_or_completion_marker() {
+        let _guard = test_guard()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_state();
+        with_state(|state| {
+            state.last_message = Some(SessionMessage {
+                is_user: false,
+                content: "Implemented the requested changes and added tests.".to_string(),
+            });
+        });
+        let mut config = bootstrap_config();
+        config.targets[0].build_docs_before_continue = false;
+        config.targets[0].build_docs_completed = true;
+
+        let update =
+            process_target_with_deps(0, &config, &[None], &EngineAction::CheckAll, &test_deps());
+
+        assert!(matches!(update.decision, TargetDecision::Sent));
+        let state = with_state(|state| state.clone());
+        assert_eq!(state.sent_texts.len(), 1);
+        assert_eq!(state.sent_texts[0], NEXT_STEPS_OR_COMPLETION_PROMPT);
+    }
+
+    #[test]
+    fn emphasized_design_doc_no_still_counts_as_more_work() {
+        let _guard = test_guard()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_state();
+        with_state(|state| {
+            state.last_message = Some(SessionMessage {
+                is_user: false,
+                content: "## Tasks Accomplished\n\
+Completed PR 8.\n\
+---\n\
+## Next Steps:\n\
+Task 210 remains blocked on zigmera-lowering.\n\
+Design Doc Fully Implemented: **NO** - Tasks 210-211 remain."
+                    .to_string(),
+            });
+        });
+        let mut config = bootstrap_config();
+        config.targets[0].build_docs_before_continue = false;
+        config.targets[0].build_docs_completed = true;
+
+        let update =
+            process_target_with_deps(0, &config, &[None], &EngineAction::CheckAll, &test_deps());
+
+        assert!(matches!(update.decision, TargetDecision::Sent));
+        let state = with_state(|state| state.clone());
+        assert_eq!(state.sent_texts.len(), 1);
+        assert_eq!(
+            state.sent_texts[0],
+            config::build_continue_text(&config.default_continue_text, &config.targets[0])
+        );
+    }
 }
