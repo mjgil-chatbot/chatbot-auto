@@ -1,6 +1,8 @@
 use std::sync::Arc;
+
 use super::*;
 use crate::config::AppPaths;
+
 fn temp_app_paths() -> AppPaths {
     let root = std::env::temp_dir().join(format!(
         "chatbot-auto-import-preview-tests-{}-{}",
@@ -21,6 +23,7 @@ fn temp_app_paths() -> AppPaths {
         log_dir,
     }
 }
+
 #[test]
 fn build_import_preview_classifies_add_update_and_unchanged_targets() {
     let existing = vec![
@@ -82,6 +85,7 @@ fn build_import_preview_classifies_add_update_and_unchanged_targets() {
     assert_eq!(preview.entries[1].kind, ImportPreviewKind::Unchanged);
     assert_eq!(preview.entries[2].kind, ImportPreviewKind::Add);
 }
+
 #[test]
 fn filtered_import_preview_entries_respect_selected_filter() {
     let entries = vec![
@@ -119,6 +123,7 @@ fn filtered_import_preview_entries_respect_selected_filter() {
         1
     );
 }
+
 #[test]
 fn searched_sorted_filtered_import_preview_entries_support_multiple_sort_orders() {
     let entries = vec![
@@ -169,6 +174,7 @@ fn searched_sorted_filtered_import_preview_entries_support_multiple_sort_orders(
     assert_eq!(name_sort[1].name, "beta");
     assert_eq!(name_sort[2].name, "gamma");
 }
+
 #[test]
 fn searched_sorted_filtered_import_preview_entries_match_name_or_provider() {
     let entries = vec![
@@ -207,6 +213,7 @@ fn searched_sorted_filtered_import_preview_entries_match_name_or_provider() {
     assert_eq!(by_provider.len(), 1);
     assert_eq!(by_provider[0].provider, "codex");
 }
+
 #[test]
 fn empty_import_preview_message_distinguishes_search_from_filter_empty_states() {
     assert_eq!(
@@ -218,6 +225,7 @@ fn empty_import_preview_message_distinguishes_search_from_filter_empty_states() 
         "No update preview entries are available."
     );
 }
+
 #[test]
 fn last_legacy_import_result_lines_include_summary_and_detail() {
     let lines = last_legacy_import_result_lines(Some(&crate::config::LegacyImportResult {
@@ -237,11 +245,13 @@ fn last_legacy_import_result_lines_include_summary_and_detail() {
     assert!(lines[2].contains("applied"));
     assert!(lines[3].contains("import applied"));
 }
+
 #[test]
 fn last_legacy_import_result_lines_show_empty_state_without_result() {
     let lines = last_legacy_import_result_lines(None);
     assert_eq!(lines, vec!["No legacy import has run yet.".to_owned()]);
 }
+
 #[test]
 fn legacy_import_history_lines_show_recent_outcomes() {
     let lines = legacy_import_history_lines(
@@ -274,6 +284,7 @@ fn legacy_import_history_lines_show_recent_outcomes() {
     assert!(lines[1].contains("applied"));
     assert!(lines[2].contains("previewed"));
 }
+
 #[test]
 fn legacy_import_history_lines_respect_requested_limit() {
     let history = vec![
@@ -315,6 +326,7 @@ fn legacy_import_history_lines_respect_requested_limit() {
     assert!(lines[1].contains("/tmp/a.sh"));
     assert!(lines[2].contains("/tmp/b.sh"));
 }
+
 #[test]
 fn preview_entry_identity_and_stable_id_helpers_format_expected_text() {
     let entry = ImportPreviewEntry {
@@ -333,6 +345,7 @@ fn preview_entry_identity_and_stable_id_helpers_format_expected_text() {
         "[Add] codex / chatbot-auto - new target"
     );
 }
+
 #[test]
 fn visible_preview_summary_text_joins_multiple_entries() {
     let first = ImportPreviewEntry {
@@ -351,6 +364,7 @@ fn visible_preview_summary_text_joins_multiple_entries() {
         "[Add] codex / chatbot-auto - new target\n[Update] minimax / ziglua - managed fields changed"
     );
 }
+
 #[test]
 fn preview_review_snapshot_text_includes_source_counts_and_visible_rows() {
     let first = ImportPreviewEntry {
@@ -387,6 +401,7 @@ fn preview_review_snapshot_text_includes_source_counts_and_visible_rows() {
         text.contains("[Update] minimax / ziglua - managed fields changed | id=minimax::ziglua")
     );
 }
+
 #[test]
 fn preview_review_snapshot_markdown_includes_structured_sections() {
     let first = ImportPreviewEntry {
@@ -414,6 +429,7 @@ fn preview_review_snapshot_markdown_includes_structured_sections() {
     assert!(text.contains("## Visible Entries"));
     assert!(text.contains("- [Add] codex / chatbot-auto - new target (`codex::chatbot-auto`)"));
 }
+
 #[test]
 fn preview_review_snapshot_json_includes_machine_readable_fields() {
     let first = ImportPreviewEntry {
@@ -446,6 +462,7 @@ fn preview_review_snapshot_json_includes_machine_readable_fields() {
     assert!(text.contains("\"identity\": \"codex / chatbot-auto\""));
     assert!(text.contains("\"summary\": \"[Add] codex / chatbot-auto - new target\""));
 }
+
 #[test]
 fn target_list_label_marks_preview_focused_targets() {
     assert_eq!(
@@ -457,6 +474,7 @@ fn target_list_label_marks_preview_focused_targets() {
         "codex / chatbot-auto"
     );
 }
+
 #[test]
 fn import_preview_kind_metadata_describes_review_state() {
     assert_eq!(ImportPreviewKind::Add.metadata(), ("Add", "new target"));
@@ -468,4 +486,153 @@ fn import_preview_kind_metadata_describes_review_state() {
         ImportPreviewKind::Unchanged.metadata(),
         ("Unchanged", "already matches import")
     );
+}
+
+#[test]
+fn record_legacy_import_result_keeps_latest_first_and_caps_history() {
+    let mut config = AppConfig::default();
+    for index in 0..(LEGACY_IMPORT_HISTORY_LIMIT + 2) {
+        record_legacy_import_result(
+            &mut config,
+            crate::config::LegacyImportResult {
+                recorded_at: format!("2026-05-05 09:{index:02}:00"),
+                source_path: format!("/tmp/{index}.sh"),
+                outcome: "previewed".to_owned(),
+                processed: index,
+                added: 0,
+                updated: 0,
+                unchanged: 0,
+                detail: format!("result {index}"),
+            },
+        );
+    }
+
+    assert_eq!(
+        config.legacy_import_history.len(),
+        LEGACY_IMPORT_HISTORY_LIMIT
+    );
+    assert_eq!(
+        config.legacy_import_history[0].source_path,
+        format!("/tmp/{}.sh", LEGACY_IMPORT_HISTORY_LIMIT + 1)
+    );
+    assert_eq!(
+        config
+            .last_legacy_import_result
+            .as_ref()
+            .expect("last result should exist")
+            .source_path,
+        format!("/tmp/{}.sh", LEGACY_IMPORT_HISTORY_LIMIT + 1)
+    );
+}
+
+#[test]
+fn clear_legacy_import_status_resets_latest_and_history() {
+    let mut config = AppConfig {
+        last_legacy_import_result: Some(crate::config::LegacyImportResult {
+            recorded_at: "2026-05-05 09:10:00".to_owned(),
+            source_path: "/tmp/a.sh".to_owned(),
+            outcome: "applied".to_owned(),
+            processed: 1,
+            added: 1,
+            updated: 0,
+            unchanged: 0,
+            detail: "import applied".to_owned(),
+        }),
+        legacy_import_history: vec![crate::config::LegacyImportResult {
+            recorded_at: "2026-05-05 09:10:00".to_owned(),
+            source_path: "/tmp/a.sh".to_owned(),
+            outcome: "applied".to_owned(),
+            processed: 1,
+            added: 1,
+            updated: 0,
+            unchanged: 0,
+            detail: "import applied".to_owned(),
+        }],
+        ..AppConfig::default()
+    };
+
+    clear_legacy_import_status(&mut config);
+
+    assert!(config.last_legacy_import_result.is_none());
+    assert!(config.legacy_import_history.is_empty());
+}
+
+#[test]
+fn dismiss_import_preview_resets_filter_to_all() {
+    let paths = temp_app_paths();
+    let mut app = ChatbotAutoApp::new(AppConfig::default(), Arc::new(paths));
+    app.import_preview = Some(build_import_preview(
+        &[],
+        vec![TargetConfig {
+            name: "chatbot-auto".to_owned(),
+            provider: "codex".to_owned(),
+            data_dir: "/tmp/codex".into(),
+            continue_text: "continue".to_owned(),
+            ..TargetConfig::default()
+        }],
+        "/tmp/watcher.sh".to_owned(),
+    ));
+    app.import_preview_filter = ImportPreviewFilter::Update;
+
+    app.dismiss_import_preview();
+
+    assert_eq!(app.import_preview_filter, ImportPreviewFilter::All);
+    assert_eq!(app.import_preview_sort, ImportPreviewSort::KindThenName);
+    assert!(app.import_preview_search.is_empty());
+}
+
+#[test]
+fn import_legacy_targets_skips_invalid_watcher_path() {
+    let paths = temp_app_paths();
+    let mut config = AppConfig::default();
+    config.legacy_watcher_script_path = "/definitely/missing/watcher.sh".to_owned();
+    let mut app = ChatbotAutoApp::new(config, Arc::new(paths));
+
+    app.import_legacy_targets();
+
+    assert!(app.import_preview.is_none());
+    let last_log = app.logs.last().expect("import failure should be logged");
+    assert!(last_log.contains("legacy watcher import skipped"));
+    assert!(last_log.contains("does not exist"));
+    let result = app
+        .config
+        .last_legacy_import_result
+        .as_ref()
+        .expect("last import result should be recorded");
+    assert_eq!(result.outcome, "skipped");
+    assert_eq!(result.processed, 0);
+    assert!(result.detail.contains("does not exist"));
+    assert_eq!(app.config.legacy_import_history.len(), 1);
+}
+
+#[test]
+fn apply_import_preview_records_last_import_result() {
+    let paths = temp_app_paths();
+    let mut app = ChatbotAutoApp::new(AppConfig::default(), Arc::new(paths));
+    app.import_preview = Some(build_import_preview(
+        &[],
+        vec![TargetConfig {
+            name: "chatbot-auto".to_owned(),
+            provider: "codex".to_owned(),
+            data_dir: "/tmp/codex".into(),
+            continue_text: "continue".to_owned(),
+            ..TargetConfig::default()
+        }],
+        "/tmp/watcher.sh".to_owned(),
+    ));
+
+    app.apply_import_preview();
+
+    let result = app
+        .config
+        .last_legacy_import_result
+        .as_ref()
+        .expect("last import result should be recorded");
+    assert_eq!(result.outcome, "applied");
+    assert_eq!(result.source_path, "/tmp/watcher.sh");
+    assert_eq!(result.processed, 1);
+    assert_eq!(result.added, 1);
+    assert_eq!(result.updated, 0);
+    assert_eq!(result.unchanged, 0);
+    assert_eq!(app.config.legacy_import_history.len(), 1);
 }
