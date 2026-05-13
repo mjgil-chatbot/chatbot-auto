@@ -9,6 +9,7 @@ const COMPLETION_PATTERNS: &[&str] = &[
     "no remaining work",
     "no further work",
 ];
+
 fn normalize_for_matching(content: &str) -> String {
     content
         .chars()
@@ -21,6 +22,7 @@ fn normalize_for_matching(content: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
+
 pub fn content_indicates_completion(content: &str) -> bool {
     let normalized = normalize_for_matching(content);
     if normalized.contains("design doc fully implemented") {
@@ -42,6 +44,7 @@ pub fn content_indicates_completion(content: &str) -> bool {
         .iter()
         .any(|pattern| normalized.contains(pattern))
 }
+
 pub fn content_mentions_next_step(content: &str) -> bool {
     let normalized = normalize_for_matching(content);
 
@@ -74,4 +77,67 @@ pub fn content_mentions_next_step(content: &str) -> bool {
     accept_patterns
         .iter()
         .any(|pattern| normalized.contains(pattern))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{content_indicates_completion, content_mentions_next_step};
+
+    #[test]
+    fn accepts_next_steps_language() {
+        assert!(content_mentions_next_step(
+            "Tasks Accomplished\n\nNext Steps:\n1. Continue with parser cleanup."
+        ));
+        assert!(content_mentions_next_step(
+            "There is remaining integration work."
+        ));
+    }
+
+    #[test]
+    fn rejects_completion_language() {
+        assert!(!content_mentions_next_step("There is no more work left."));
+        assert!(!content_mentions_next_step("All work is complete."));
+        assert!(!content_mentions_next_step("Design Doc Fully Implemented"));
+        assert!(content_indicates_completion("There is no more work left."));
+        assert!(content_indicates_completion("Design Doc Fully Implemented"));
+    }
+
+    #[test]
+    fn accepts_design_doc_not_fully_implemented_status_with_next_steps() {
+        let content = "## Next Steps:\n\
+Task 210 remains blocked on zigmera-lowering.\n\
+Design Doc Fully Implemented: NO - Tasks 210-211 remain.";
+        assert!(content_mentions_next_step(content));
+        assert!(!content_indicates_completion(content));
+    }
+
+    #[test]
+    fn accepts_markdown_emphasized_incomplete_status() {
+        let content = "## Next Steps:\n\
+Task 210 remains blocked on zigmera-lowering.\n\
+Design Doc Fully Implemented: **NO** - Tasks 210-211 remain.";
+        assert!(content_mentions_next_step(content));
+        assert!(!content_indicates_completion(content));
+    }
+
+    #[test]
+    fn rejects_irrelevant_text() {
+        assert!(!content_mentions_next_step(
+            "Implemented the change and added tests."
+        ));
+    }
+
+    #[test]
+    fn explicit_next_steps_overrides_completion() {
+        // When content has an explicit "Next Steps:" section heading,
+        // it should be treated as having next steps even if it also
+        // contains "Design Doc Fully Implemented"
+        let content =
+            "**Next Steps:**\n1. **B.16 (Formal Lean Proofs)**: Implement Chimera/Beam.\n\
+             **Design Doc Fully Implemented** — Phase 5.6 (B.1-B.14) is complete.";
+        assert!(
+            content_mentions_next_step(content),
+            "Explicit Next Steps: heading should override Design Doc Fully Implemented"
+        );
+    }
 }
